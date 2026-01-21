@@ -20,7 +20,7 @@ export const API = `${BACKEND_URL}/api`;
 
 function App() {
   const [isAdmin, setIsAdmin] = useState(false);
-  const [settings, setSettings] = useState({ geminiKeySet: false, visionKeySet: false });
+  const [settings, setSettings] = useState({ geminiKeySet: false });
 
   // Check for admin session
   useEffect(() => {
