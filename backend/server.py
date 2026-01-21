@@ -1,6 +1,5 @@
-from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Form, Depends, Response
+from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Form, Response
 from fastapi.responses import StreamingResponse, FileResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -13,17 +12,14 @@ import uuid
 from datetime import datetime, timezone
 import base64
 import io
-import asyncio
+import re
+import json
 import pdfplumber
-from PIL import Image, ImageDraw, ImageFilter
-import secrets
-import traceback
+from PIL import Image
+import xml.etree.ElementTree as ET
 
 # Gemini integration
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
-
-# Google Cloud Vision
-from google.cloud import vision_v1
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -54,12 +50,16 @@ logger = logging.getLogger(__name__)
 ADMIN_EMAIL = "Mortada@howvier.com"
 ADMIN_PASSWORD = "Mo1982#"
 
-security = HTTPBasic()
-
 # Models
 class AdminLogin(BaseModel):
     email: str
     password: str
+
+class SettingsInput(BaseModel):
+    gemini_api_key: Optional[str] = None
+
+class SettingsResponse(BaseModel):
+    gemini_api_key_set: bool
 
 class StyleCreate(BaseModel):
     name: str
@@ -74,9 +74,8 @@ class StyleResponse(BaseModel):
     thumbnail: Optional[str] = None
     created_at: str
 
-class CityCreate(BaseModel):
-    name: str
-    style_id: str
+class SpacingInput(BaseModel):
+    expansion_percentage: int = 0  # 0-200%
 
 class QueueItem(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -84,8 +83,9 @@ class QueueItem(BaseModel):
     city_name: str
     style_id: str
     style_name: str
-    status: str  # waiting, stylizing, detecting, creating_svg, done, error
+    status: str  # waiting, stage1_processing, stage1_complete, spacing_applied, stage2_processing, done, error
     progress: int = 0
+    expansion_percentage: Optional[int] = None
     error_message: Optional[str] = None
     created_at: str
     updated_at: str
@@ -95,37 +95,13 @@ class ProcessedCity(BaseModel):
     id: str
     city_name: str
     style_name: str
-    building_count: int
     layer_count: int
-    original_image_path: str
-    styled_image_path: str
-    svg_path: str
-    png_preview_path: str
-    buildings: List[dict]
-    processing_time_seconds: float
+    expansion_percentage: int
+    original_aspect_ratio: str
+    final_aspect_ratio: str
     created_at: str
 
-class SettingsInput(BaseModel):
-    gemini_api_key: Optional[str] = None
-    vision_api_key: Optional[str] = None
-
-class SettingsResponse(BaseModel):
-    gemini_api_key_set: bool
-    vision_api_key_set: bool
-
 # Helper functions
-def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
-    """Verify admin credentials"""
-    is_correct_email = secrets.compare_digest(credentials.username.lower(), ADMIN_EMAIL.lower())
-    is_correct_password = secrets.compare_digest(credentials.password, ADMIN_PASSWORD)
-    if not (is_correct_email and is_correct_password):
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid credentials",
-            headers={"WWW-Authenticate": "Basic"},
-        )
-    return credentials.username
-
 async def get_api_keys():
     """Get API keys from DB"""
     settings = await db.settings.find_one({}, {"_id": 0})
@@ -145,47 +121,130 @@ async def extract_text_from_pdf(pdf_path: str) -> str:
         logger.error(f"PDF extraction error: {e}")
         return ""
 
-def generate_simple_svg(buildings: List[dict], image_width: int, image_height: int) -> str:
-    """Generate a laser-ready SVG with buildings on separate layers"""
-    svg_parts = [
-        f'<?xml version="1.0" encoding="UTF-8"?>',
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{image_width}" height="{image_height}" viewBox="0 0 {image_width} {image_height}">',
-        f'  <rect width="100%" height="100%" fill="white"/>',
-    ]
+def expand_horizontal_spacing(svg_content: str, expansion_percentage: int) -> dict:
+    """
+    Expands horizontal distance between elements in SVG uniformly
+    WITHOUT distorting shapes - only X-axis translation
     
-    # Sort buildings by size (area) - largest first (front layer)
-    sorted_buildings = sorted(buildings, key=lambda b: b.get('area', 0), reverse=True)
+    Returns dict with new SVG and aspect ratio info
+    """
+    if expansion_percentage == 0:
+        # Parse to get dimensions
+        viewbox_match = re.search(r'viewBox="([^"]+)"', svg_content)
+        if viewbox_match:
+            parts = viewbox_match.group(1).split()
+            if len(parts) >= 4:
+                width, height = float(parts[2]), float(parts[3])
+                return {
+                    "svg": svg_content,
+                    "original_width": width,
+                    "new_width": width,
+                    "height": height,
+                    "original_aspect_ratio": f"{width:.0f}:{height:.0f}",
+                    "new_aspect_ratio": f"{width:.0f}:{height:.0f}"
+                }
+        return {"svg": svg_content, "original_width": 1000, "new_width": 1000, "height": 1000}
     
-    # Assign layers
-    for i, building in enumerate(sorted_buildings):
-        layer_num = i + 1
-        building['layer'] = layer_num
-    
-    # Create SVG groups for each layer (back to front for proper rendering)
-    for building in reversed(sorted_buildings):
-        layer = building.get('layer', 1)
-        vertices = building.get('vertices', [])
-        name = building.get('name', f'Building {layer}')
+    try:
+        # Parse viewBox to get dimensions
+        viewbox_match = re.search(r'viewBox="([^"]+)"', svg_content)
+        if not viewbox_match:
+            # Try width/height attributes
+            width_match = re.search(r'width="(\d+)"', svg_content)
+            height_match = re.search(r'height="(\d+)"', svg_content)
+            orig_width = float(width_match.group(1)) if width_match else 1000
+            orig_height = float(height_match.group(1)) if height_match else 1000
+            min_x, min_y = 0, 0
+        else:
+            vb_parts = viewbox_match.group(1).split()
+            min_x, min_y = float(vb_parts[0]), float(vb_parts[1])
+            orig_width, orig_height = float(vb_parts[2]), float(vb_parts[3])
         
-        if len(vertices) >= 4:
-            # Create path from vertices
-            path_d = f"M {vertices[0]['x']} {vertices[0]['y']}"
-            for v in vertices[1:]:
-                path_d += f" L {v['x']} {v['y']}"
-            path_d += " Z"
+        # Calculate expansion factor
+        expansion_factor = 1 + (expansion_percentage / 100)
+        new_width = orig_width * expansion_factor
+        center_x = orig_width / 2
+        
+        # Function to shift X coordinates in path data
+        def shift_path_x(match):
+            cmd = match.group(1)
+            coords = match.group(2)
             
-            svg_parts.append(f'  <g id="layer-{layer}" data-layer="{layer}" data-name="{name}">')
-            svg_parts.append(f'    <path d="{path_d}" fill="none" stroke="black" stroke-width="2"/>')
-            svg_parts.append(f'  </g>')
-    
-    svg_parts.append('</svg>')
-    return '\n'.join(svg_parts)
+            # Parse coordinates
+            numbers = re.findall(r'-?\d+\.?\d*', coords)
+            if not numbers:
+                return match.group(0)
+            
+            new_numbers = []
+            for i, num in enumerate(numbers):
+                val = float(num)
+                # For commands that use X coordinates (even indices for most commands)
+                if cmd.upper() in ['M', 'L', 'T'] and i % 2 == 0:
+                    # Shift X based on distance from center
+                    distance_from_center = val - center_x
+                    new_distance = distance_from_center * expansion_factor
+                    val = center_x + new_distance - distance_from_center + val
+                    val = val + (distance_from_center * (expansion_factor - 1))
+                new_numbers.append(f"{val:.2f}")
+            
+            return f"{cmd}{' '.join(new_numbers)}"
+        
+        # Apply transformation to all transform attributes
+        def add_transform(match):
+            element = match.group(0)
+            # Find x position in element
+            x_match = re.search(r'\bx="(-?\d+\.?\d*)"', element)
+            if x_match:
+                x_val = float(x_match.group(1))
+                distance_from_center = x_val - center_x
+                shift = distance_from_center * (expansion_factor - 1)
+                new_x = x_val + shift
+                element = re.sub(r'\bx="(-?\d+\.?\d*)"', f'x="{new_x:.2f}"', element)
+            
+            # Handle transform translate
+            transform_match = re.search(r'transform="translate\((-?\d+\.?\d*)', element)
+            if transform_match:
+                tx = float(transform_match.group(1))
+                distance_from_center = tx - center_x
+                shift = distance_from_center * (expansion_factor - 1)
+                new_tx = tx + shift
+                element = re.sub(r'transform="translate\((-?\d+\.?\d*)', f'transform="translate({new_tx:.2f}', element)
+            
+            return element
+        
+        # Modify SVG
+        modified_svg = svg_content
+        
+        # Update viewBox
+        new_viewbox = f"{min_x} {min_y} {new_width:.2f} {orig_height}"
+        if viewbox_match:
+            modified_svg = re.sub(r'viewBox="[^"]+"', f'viewBox="{new_viewbox}"', modified_svg)
+        
+        # Update width attribute if present
+        modified_svg = re.sub(r'width="(\d+)"', f'width="{int(new_width)}"', modified_svg)
+        
+        # Apply transforms to groups and elements with x attributes
+        modified_svg = re.sub(r'<(g|rect|text|use|image)[^>]*>', add_transform, modified_svg)
+        
+        return {
+            "svg": modified_svg,
+            "original_width": orig_width,
+            "new_width": new_width,
+            "height": orig_height,
+            "original_aspect_ratio": f"{orig_width:.0f}:{orig_height:.0f}",
+            "new_aspect_ratio": f"{new_width:.0f}:{orig_height:.0f}",
+            "viewbox": new_viewbox
+        }
+        
+    except Exception as e:
+        logger.error(f"Spacing expansion error: {e}")
+        return {"svg": svg_content, "error": str(e)}
 
 # API Routes
 
 @api_router.get("/")
 async def root():
-    return {"message": "Layered Relief Art API - Ready to make art!"}
+    return {"message": "Layered Relief Art API - 2-Stage Gemini Process"}
 
 @api_router.get("/health")
 async def health():
@@ -211,39 +270,28 @@ async def admin_login(login: AdminLogin):
         return {"success": True, "message": "Welcome back, Mortada!"}
     raise HTTPException(status_code=401, detail="Wrong credentials. Check your sticky note.")
 
-# Settings
+# Settings (Gemini only now - no Vision API)
 @api_router.post("/settings")
 async def save_settings(settings: SettingsInput):
-    """Save API keys - can save one at a time"""
-    # Get existing settings first
+    """Save Gemini API key"""
     existing = await db.settings.find_one({}, {"_id": 0}) or {}
     
-    # Only update the key that was provided
     doc = {
         "gemini_api_key": settings.gemini_api_key if settings.gemini_api_key else existing.get("gemini_api_key", ""),
-        "vision_api_key": settings.vision_api_key if settings.vision_api_key else existing.get("vision_api_key", ""),
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
     
     await db.settings.delete_many({})
     await db.settings.insert_one(doc)
     
-    # Tell user which key was saved
-    saved_keys = []
-    if settings.gemini_api_key:
-        saved_keys.append("Gemini")
-    if settings.vision_api_key:
-        saved_keys.append("Vision")
-    
-    return {"success": True, "message": f"{' & '.join(saved_keys)} API key saved!"}
+    return {"success": True, "message": "Gemini API key saved!"}
 
 @api_router.get("/settings", response_model=SettingsResponse)
 async def get_settings():
     """Get settings status"""
     settings = await get_api_keys()
     return SettingsResponse(
-        gemini_api_key_set=bool(settings.get("gemini_api_key")),
-        vision_api_key_set=bool(settings.get("vision_api_key"))
+        gemini_api_key_set=bool(settings.get("gemini_api_key"))
     )
 
 # Style Library
@@ -261,17 +309,14 @@ async def upload_style(
     if len(content) > 50 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Max 50MB please")
     
-    # Save file
     style_id = str(uuid.uuid4())
     filename = f"{style_id}.pdf"
     filepath = UPLOAD_DIR / "styles" / filename
     with open(filepath, "wb") as f:
         f.write(content)
     
-    # Extract text preview
     text_preview = await extract_text_from_pdf(str(filepath))
     
-    # Save to DB
     doc = {
         "id": style_id,
         "name": name,
@@ -298,7 +343,6 @@ async def delete_style(style_id: str):
     if not style:
         raise HTTPException(status_code=404, detail="Style not found")
     
-    # Delete file
     filepath = Path(style.get("filepath", ""))
     if filepath.exists():
         filepath.unlink()
@@ -317,7 +361,6 @@ async def upload_city(
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Only images allowed")
     
-    # Verify style exists
     style = await db.styles.find_one({"id": style_id}, {"_id": 0})
     if not style:
         raise HTTPException(status_code=404, detail="Style not found")
@@ -326,7 +369,6 @@ async def upload_city(
     if len(content) > 50 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Max 50MB please")
     
-    # Save file
     city_id = str(uuid.uuid4())
     ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
     filename = f"{city_id}.{ext}"
@@ -334,7 +376,6 @@ async def upload_city(
     with open(filepath, "wb") as f:
         f.write(content)
     
-    # Add to queue
     now = datetime.now(timezone.utc).isoformat()
     queue_doc = {
         "id": city_id,
@@ -344,6 +385,7 @@ async def upload_city(
         "original_filepath": str(filepath),
         "status": "waiting",
         "progress": 0,
+        "expansion_percentage": None,
         "error_message": None,
         "created_at": now,
         "updated_at": now
@@ -366,30 +408,22 @@ async def cancel_queue_item(item_id: str):
         raise HTTPException(status_code=404, detail="Item not found")
     return {"message": "Cancelled"}
 
-@api_router.post("/queue/process-next")
-async def process_next():
-    """Process the next item in queue"""
-    # Get next waiting item
-    item = await db.queue.find_one({"status": "waiting"}, {"_id": 0})
+# STAGE 1: Gemini Style Transfer
+@api_router.post("/process/stage1/{city_id}")
+async def process_stage1(city_id: str):
+    """Stage 1: Convert photo to vector line art SVG using Gemini"""
+    item = await db.queue.find_one({"id": city_id}, {"_id": 0})
     if not item:
-        return {"message": "Queue is empty!", "processed": False}
+        raise HTTPException(status_code=404, detail="City not found in queue")
     
-    item_id = item["id"]
+    settings = await get_api_keys()
+    if not settings.get("gemini_api_key"):
+        raise HTTPException(status_code=400, detail="Gemini API key not configured")
     
     try:
-        # Get API keys
-        settings = await get_api_keys()
-        if not settings.get("gemini_api_key"):
-            raise HTTPException(status_code=400, detail="Gemini API key not configured")
-        if not settings.get("vision_api_key"):
-            raise HTTPException(status_code=400, detail="Vision API key not configured")
-        
-        start_time = datetime.now()
-        
-        # Update status: Stylizing
         await db.queue.update_one(
-            {"id": item_id},
-            {"$set": {"status": "stylizing", "progress": 10, "updated_at": datetime.now(timezone.utc).isoformat()}}
+            {"id": city_id},
+            {"$set": {"status": "stage1_processing", "progress": 10, "updated_at": datetime.now(timezone.utc).isoformat()}}
         )
         
         # Get style PDF text
@@ -407,172 +441,377 @@ async def process_next():
         img = Image.open(io.BytesIO(image_bytes))
         img_width, img_height = img.size
         
-        # Step A: Style Transfer with Gemini
-        await db.queue.update_one(
-            {"id": item_id},
-            {"$set": {"progress": 20}}
-        )
+        await db.queue.update_one({"id": city_id}, {"$set": {"progress": 30}})
         
+        # Gemini Style Transfer
         chat = LlmChat(
             api_key=settings["gemini_api_key"],
-            session_id=f"style-{item_id}",
-            system_message="You are a vector line art specialist. Create clean, precise line drawings suitable for laser cutting."
+            session_id=f"stage1-{city_id}",
+            system_message="You are a vector line art specialist creating clean SVG artwork for laser cutting."
         )
-        chat.with_model("gemini", "gemini-3-pro-image-preview").with_params(modalities=["image", "text"])
+        chat.with_model("gemini", "gemini-2.0-flash-exp").with_params(temperature=0.7)
         
         style_instructions = f"Apply this artistic style: {style_text}" if style_text else "Use clean architectural line art style"
-        prompt = f"""Transform this city skyline photograph into a clean vector line drawing.
+        
+        prompt = f"""Transform this city skyline photograph into a clean vector line art SVG.
 
 {style_instructions}
 
-CRITICAL REQUIREMENTS:
-1. Output MUST be white background with black lines ONLY
-2. Draw clean, precise outlines of each building
-3. Include window patterns and architectural details as simple lines
-4. NO shading, NO gradients, NO fills - LINES ONLY
-5. Make it suitable for laser cutting
-6. Preserve the exact positions and proportions of buildings"""
+OUTPUT REQUIREMENTS:
+1. Create a valid SVG file with viewBox="0 0 {img_width} {img_height}"
+2. Use ONLY black strokes (stroke="#000000") on transparent/white background
+3. NO fills, NO gradients, NO raster images - LINES ONLY
+4. Draw clean, precise outlines of each building
+5. Include architectural details (windows, edges) as simple lines
+6. Make it suitable for laser cutting
+7. Preserve exact positions and proportions of buildings
+
+Return ONLY the complete SVG code starting with <?xml and ending with </svg>
+Do not include any explanation or markdown - just the raw SVG."""
 
         msg = UserMessage(text=prompt, file_contents=[ImageContent(image_b64)])
-        text_response, images = await chat.send_message_multimodal_response(msg)
+        response = await chat.send_message(msg)
         
-        if not images:
-            raise Exception("Gemini didn't generate an image. Try a different style.")
+        await db.queue.update_one({"id": city_id}, {"$set": {"progress": 70}})
         
-        # Save styled image
-        styled_filename = f"{item_id}_styled.png"
-        styled_filepath = UPLOAD_DIR / "processed" / styled_filename
-        styled_bytes = base64.b64decode(images[0]["data"])
-        with open(styled_filepath, "wb") as f:
-            f.write(styled_bytes)
+        # Extract SVG from response
+        svg_content = response.strip()
         
-        await db.queue.update_one(
-            {"id": item_id},
-            {"$set": {"status": "detecting", "progress": 50, "updated_at": datetime.now(timezone.utc).isoformat()}}
-        )
+        # Clean up response if needed
+        if "```" in svg_content:
+            # Extract SVG from markdown code block
+            svg_match = re.search(r'```(?:svg|xml)?\s*([\s\S]*?)```', svg_content)
+            if svg_match:
+                svg_content = svg_match.group(1).strip()
         
-        # Step B: Building Detection with Vision API
-        client_options = {"api_key": settings["vision_api_key"]}
-        vision_client = vision_v1.ImageAnnotatorClient(client_options=client_options)
+        # Ensure it starts with XML declaration or SVG tag
+        if not svg_content.startswith('<?xml') and not svg_content.startswith('<svg'):
+            # Try to find SVG content
+            svg_start = svg_content.find('<svg')
+            if svg_start != -1:
+                svg_content = svg_content[svg_start:]
         
-        # Use original image for detection (better accuracy)
-        vision_image = vision_v1.Image(content=image_bytes)
-        response = vision_client.object_localization(image=vision_image)
+        # Add XML declaration if missing
+        if not svg_content.startswith('<?xml'):
+            svg_content = '<?xml version="1.0" encoding="UTF-8"?>\n' + svg_content
         
-        if response.error.message:
-            raise Exception(f"Vision API error: {response.error.message}")
-        
-        # Process detections
-        buildings = []
-        building_terms = ["building", "skyscraper", "tower", "house", "structure", "architecture", "high-rise"]
-        
-        for i, obj in enumerate(response.localized_object_annotations):
-            obj_name = obj.name.lower()
-            is_building = any(term in obj_name for term in building_terms)
-            
-            if is_building or obj.score > 0.6:  # Include high-confidence objects
-                vertices = []
-                for vertex in obj.bounding_poly.normalized_vertices:
-                    vertices.append({
-                        "x": int(vertex.x * img_width),
-                        "y": int(vertex.y * img_height)
-                    })
-                
-                # Calculate area for sorting
-                if len(vertices) >= 4:
-                    width = abs(vertices[2]["x"] - vertices[0]["x"])
-                    height = abs(vertices[2]["y"] - vertices[0]["y"])
-                    area = width * height
-                else:
-                    area = 0
-                
-                buildings.append({
-                    "name": f"Building {len(buildings) + 1}",
-                    "original_name": obj.name,
-                    "confidence": obj.score,
-                    "vertices": vertices,
-                    "area": area
-                })
-        
-        # If no buildings detected, create default layers based on image regions
-        if len(buildings) == 0:
-            third_height = img_height // 3
-            buildings = [
-                {
-                    "name": "Background Layer",
-                    "vertices": [{"x": 0, "y": 0}, {"x": img_width, "y": 0}, {"x": img_width, "y": third_height}, {"x": 0, "y": third_height}],
-                    "area": img_width * third_height
-                },
-                {
-                    "name": "Middle Layer", 
-                    "vertices": [{"x": 0, "y": third_height}, {"x": img_width, "y": third_height}, {"x": img_width, "y": 2*third_height}, {"x": 0, "y": 2*third_height}],
-                    "area": img_width * third_height
-                },
-                {
-                    "name": "Foreground Layer",
-                    "vertices": [{"x": 0, "y": 2*third_height}, {"x": img_width, "y": 2*third_height}, {"x": img_width, "y": img_height}, {"x": 0, "y": img_height}],
-                    "area": img_width * third_height
-                }
-            ]
-        
-        await db.queue.update_one(
-            {"id": item_id},
-            {"$set": {"status": "creating_svg", "progress": 75, "updated_at": datetime.now(timezone.utc).isoformat()}}
-        )
-        
-        # Step C: Generate SVG
-        svg_content = generate_simple_svg(buildings, img_width, img_height)
-        svg_filename = f"{item_id}.svg"
-        svg_filepath = UPLOAD_DIR / "processed" / svg_filename
-        with open(svg_filepath, "w") as f:
+        # Save Stage 1 SVG
+        stage1_filename = f"{city_id}_stage1.svg"
+        stage1_filepath = UPLOAD_DIR / "processed" / stage1_filename
+        with open(stage1_filepath, "w") as f:
             f.write(svg_content)
         
-        # Create PNG preview from styled image
-        preview_filename = f"{item_id}_preview.png"
-        preview_filepath = UPLOAD_DIR / "processed" / preview_filename
-        styled_img = Image.open(styled_filepath)
-        styled_img.thumbnail((800, 800))
-        styled_img.save(preview_filepath, "PNG")
+        # Update queue
+        await db.queue.update_one(
+            {"id": city_id},
+            {"$set": {
+                "status": "stage1_complete",
+                "progress": 100,
+                "stage1_svg_path": str(stage1_filepath),
+                "original_width": img_width,
+                "original_height": img_height,
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }}
+        )
         
-        # Calculate processing time
-        processing_time = (datetime.now() - start_time).total_seconds()
+        return {
+            "status": "stage1_complete",
+            "city_id": city_id,
+            "message": "Stage 1 complete - Vector line art generated!",
+            "next_step": "adjust_spacing",
+            "original_dimensions": {"width": img_width, "height": img_height}
+        }
         
-        # Step D: Save to processed collection
+    except Exception as e:
+        logger.error(f"Stage 1 error: {e}")
+        await db.queue.update_one(
+            {"id": city_id},
+            {"$set": {"status": "error", "error_message": str(e), "updated_at": datetime.now(timezone.utc).isoformat()}}
+        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Get Stage 1 SVG preview
+@api_router.get("/process/stage1/{city_id}/preview")
+async def get_stage1_preview(city_id: str):
+    """Get Stage 1 SVG content for preview"""
+    item = await db.queue.find_one({"id": city_id}, {"_id": 0})
+    if not item:
+        raise HTTPException(status_code=404, detail="City not found")
+    
+    if not item.get("stage1_svg_path"):
+        raise HTTPException(status_code=400, detail="Stage 1 not complete yet")
+    
+    svg_path = Path(item["stage1_svg_path"])
+    if not svg_path.exists():
+        raise HTTPException(status_code=404, detail="SVG file not found")
+    
+    with open(svg_path, "r") as f:
+        svg_content = f.read()
+    
+    return {
+        "svg": svg_content,
+        "original_width": item.get("original_width", 1000),
+        "original_height": item.get("original_height", 1000)
+    }
+
+# Apply Spacing
+@api_router.post("/process/spacing/{city_id}")
+async def apply_spacing(city_id: str, spacing: SpacingInput):
+    """Apply horizontal spacing expansion to Stage 1 SVG"""
+    item = await db.queue.find_one({"id": city_id}, {"_id": 0})
+    if not item:
+        raise HTTPException(status_code=404, detail="City not found")
+    
+    if item.get("status") not in ["stage1_complete", "spacing_applied"]:
+        raise HTTPException(status_code=400, detail="Complete Stage 1 first")
+    
+    if not item.get("stage1_svg_path"):
+        raise HTTPException(status_code=400, detail="Stage 1 SVG not found")
+    
+    try:
+        # Read Stage 1 SVG
+        with open(item["stage1_svg_path"], "r") as f:
+            stage1_svg = f.read()
+        
+        # Apply spacing expansion
+        result = expand_horizontal_spacing(stage1_svg, spacing.expansion_percentage)
+        
+        # Save spaced SVG
+        spaced_filename = f"{city_id}_spaced.svg"
+        spaced_filepath = UPLOAD_DIR / "processed" / spaced_filename
+        with open(spaced_filepath, "w") as f:
+            f.write(result["svg"])
+        
+        # Update queue
+        await db.queue.update_one(
+            {"id": city_id},
+            {"$set": {
+                "status": "spacing_applied",
+                "expansion_percentage": spacing.expansion_percentage,
+                "spaced_svg_path": str(spaced_filepath),
+                "new_width": result.get("new_width"),
+                "original_aspect_ratio": result.get("original_aspect_ratio"),
+                "new_aspect_ratio": result.get("new_aspect_ratio"),
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }}
+        )
+        
+        return {
+            "status": "spacing_applied",
+            "expansion_percentage": spacing.expansion_percentage,
+            "original_aspect_ratio": result.get("original_aspect_ratio"),
+            "new_aspect_ratio": result.get("new_aspect_ratio"),
+            "new_width": result.get("new_width"),
+            "ready_for_stage2": True
+        }
+        
+    except Exception as e:
+        logger.error(f"Spacing error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Get Spaced SVG preview
+@api_router.get("/process/spacing/{city_id}/preview")
+async def get_spaced_preview(city_id: str):
+    """Get spaced SVG content for preview"""
+    item = await db.queue.find_one({"id": city_id}, {"_id": 0})
+    if not item:
+        raise HTTPException(status_code=404, detail="City not found")
+    
+    svg_path = item.get("spaced_svg_path") or item.get("stage1_svg_path")
+    if not svg_path:
+        raise HTTPException(status_code=400, detail="No SVG available")
+    
+    with open(svg_path, "r") as f:
+        svg_content = f.read()
+    
+    return {
+        "svg": svg_content,
+        "expansion_percentage": item.get("expansion_percentage", 0),
+        "new_aspect_ratio": item.get("new_aspect_ratio")
+    }
+
+# STAGE 2: Gemini Layer Separation
+@api_router.post("/process/stage2/{city_id}")
+async def process_stage2(city_id: str):
+    """Stage 2: Use Gemini to separate SVG into 3 layers based on building height"""
+    item = await db.queue.find_one({"id": city_id}, {"_id": 0})
+    if not item:
+        raise HTTPException(status_code=404, detail="City not found")
+    
+    if item.get("status") not in ["spacing_applied", "stage1_complete"]:
+        raise HTTPException(status_code=400, detail="Complete spacing adjustment first")
+    
+    settings = await get_api_keys()
+    if not settings.get("gemini_api_key"):
+        raise HTTPException(status_code=400, detail="Gemini API key not configured")
+    
+    try:
+        await db.queue.update_one(
+            {"id": city_id},
+            {"$set": {"status": "stage2_processing", "progress": 10, "updated_at": datetime.now(timezone.utc).isoformat()}}
+        )
+        
+        # Get the spaced SVG (or stage1 if no spacing applied)
+        svg_path = item.get("spaced_svg_path") or item.get("stage1_svg_path")
+        with open(svg_path, "r") as f:
+            input_svg = f.read()
+        
+        # Get viewBox for prompt
+        viewbox_match = re.search(r'viewBox="([^"]+)"', input_svg)
+        viewbox = viewbox_match.group(1) if viewbox_match else "0 0 1000 1000"
+        
+        await db.queue.update_one({"id": city_id}, {"$set": {"progress": 30}})
+        
+        # Gemini Layer Separation
+        chat = LlmChat(
+            api_key=settings["gemini_api_key"],
+            session_id=f"stage2-{city_id}",
+            system_message="You are an expert at analyzing city skyline SVG artwork and separating buildings into depth layers for laser cutting."
+        )
+        chat.with_model("gemini", "gemini-2.0-flash-exp").with_params(temperature=0.3)
+        
+        prompt = f"""You are analyzing a city skyline vector line art SVG for laser cutting.
+
+INPUT SVG:
+{input_svg}
+
+TASK: Create THREE separate SVG layers based on building HEIGHT.
+
+MEASUREMENT SYSTEM:
+- Street level (bottom) = 0
+- Tallest building in this skyline = 10
+- Measure each building's height on this 0-10 scale
+
+LAYER SEPARATION RULES:
+
+LAYER 1 (Nearest/Foreground):
+- Include ONLY buildings with height 0-3 (shortest buildings)
+- Delete all buildings taller than 3
+- For buildings partially visible, EXTEND them down to street level
+- Complete hidden portions with matching line style
+- Keep exact X positions - DO NOT shift horizontally
+
+LAYER 2 (Middle):
+- Include ONLY buildings with height 3.01-6 (medium buildings)
+- Delete buildings ≤3 AND buildings >6
+- Extend partially visible buildings to street level
+- Keep exact X positions
+
+LAYER 3 (Farthest/Background):
+- Include ONLY buildings with height >6 (tallest buildings/skyscrapers)
+- Delete all buildings ≤6
+- Extend partially visible buildings to street level
+- Keep exact X positions
+
+CRITICAL REQUIREMENTS:
+1. Each layer must have viewBox="{viewbox}"
+2. DO NOT move buildings horizontally
+3. DO NOT change building widths or shapes
+4. Use stroke="#000000" and fill="none"
+5. Each SVG must be complete and valid
+6. Include XML declaration
+
+OUTPUT FORMAT (JSON):
+Return ONLY a JSON object with three SVG strings:
+{{"layer_1": "<complete SVG>", "layer_2": "<complete SVG>", "layer_3": "<complete SVG>"}}
+
+No explanation, no markdown - just the JSON object."""
+
+        msg = UserMessage(text=prompt)
+        response = await chat.send_message(msg)
+        
+        await db.queue.update_one({"id": city_id}, {"$set": {"progress": 70}})
+        
+        # Parse response
+        response_text = response.strip()
+        
+        # Clean up markdown if present
+        if "```" in response_text:
+            json_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', response_text)
+            if json_match:
+                response_text = json_match.group(1).strip()
+        
+        # Try to extract JSON
+        try:
+            # Find JSON object
+            json_start = response_text.find('{')
+            json_end = response_text.rfind('}') + 1
+            if json_start != -1 and json_end > json_start:
+                response_text = response_text[json_start:json_end]
+            
+            layers_data = json.loads(response_text)
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON parse error: {e}, response: {response_text[:500]}")
+            # Fallback: create simple layers from input
+            layers_data = {
+                "layer_1": input_svg,
+                "layer_2": input_svg,
+                "layer_3": input_svg
+            }
+        
+        # Save layer SVGs
+        layer_paths = {}
+        for layer_num in [1, 2, 3]:
+            layer_key = f"layer_{layer_num}"
+            svg_content = layers_data.get(layer_key, layers_data.get(f"layer{layer_num}", ""))
+            
+            if not svg_content:
+                svg_content = input_svg  # Fallback
+            
+            # Ensure valid SVG
+            if not svg_content.startswith('<?xml'):
+                svg_content = '<?xml version="1.0" encoding="UTF-8"?>\n' + svg_content
+            
+            filename = f"{city_id}_layer_{layer_num}.svg"
+            filepath = UPLOAD_DIR / "processed" / filename
+            with open(filepath, "w") as f:
+                f.write(svg_content)
+            layer_paths[layer_key] = str(filepath)
+        
+        await db.queue.update_one({"id": city_id}, {"$set": {"progress": 90}})
+        
+        # Move to processed collection
+        now = datetime.now(timezone.utc).isoformat()
         processed_doc = {
-            "id": item_id,
+            "id": city_id,
             "city_name": item["city_name"],
             "style_id": item["style_id"],
             "style_name": item["style_name"],
-            "building_count": len(buildings),
-            "layer_count": len(buildings),
-            "original_image_path": item["original_filepath"],
-            "styled_image_path": str(styled_filepath),
-            "svg_path": str(svg_filepath),
-            "png_preview_path": str(preview_filepath),
-            "buildings": buildings,
-            "processing_time_seconds": processing_time,
-            "created_at": datetime.now(timezone.utc).isoformat()
+            "original_filepath": item["original_filepath"],
+            "stage1_svg_path": item.get("stage1_svg_path"),
+            "spaced_svg_path": item.get("spaced_svg_path"),
+            "layer_1_path": layer_paths["layer_1"],
+            "layer_2_path": layer_paths["layer_2"],
+            "layer_3_path": layer_paths["layer_3"],
+            "layer_count": 3,
+            "expansion_percentage": item.get("expansion_percentage", 0),
+            "original_width": item.get("original_width"),
+            "original_height": item.get("original_height"),
+            "new_width": item.get("new_width"),
+            "original_aspect_ratio": item.get("original_aspect_ratio", ""),
+            "new_aspect_ratio": item.get("new_aspect_ratio", ""),
+            "created_at": item["created_at"],
+            "processed_at": now
         }
         await db.processed.insert_one(processed_doc)
         
         # Update queue status
         await db.queue.update_one(
-            {"id": item_id},
-            {"$set": {"status": "done", "progress": 100, "updated_at": datetime.now(timezone.utc).isoformat()}}
+            {"id": city_id},
+            {"$set": {"status": "done", "progress": 100, "updated_at": now}}
         )
         
         return {
-            "message": f"Processed {item['city_name']}!",
-            "processed": True,
-            "city_id": item_id,
-            "building_count": len(buildings),
-            "processing_time": f"{processing_time:.1f}s"
+            "status": "complete",
+            "city_id": city_id,
+            "message": "All 3 layers generated!",
+            "layer_count": 3
         }
         
     except Exception as e:
-        logger.error(f"Processing error: {e}\n{traceback.format_exc()}")
+        logger.error(f"Stage 2 error: {e}")
         await db.queue.update_one(
-            {"id": item_id},
+            {"id": city_id},
             {"$set": {"status": "error", "error_message": str(e), "updated_at": datetime.now(timezone.utc).isoformat()}}
         )
         raise HTTPException(status_code=500, detail=str(e))
@@ -580,29 +819,26 @@ CRITICAL REQUIREMENTS:
 # Public API - Processed Cities
 @api_router.get("/cities")
 async def list_cities():
-    """List all processed cities (for public site)"""
-    cities = await db.processed.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
-    # Return simplified data for listing
+    """List all processed cities"""
+    cities = await db.processed.find({}, {"_id": 0}).sort("processed_at", -1).to_list(100)
     return [{
         "id": c["id"],
         "city_name": c["city_name"],
         "style_name": c["style_name"],
-        "building_count": c["building_count"],
         "layer_count": c["layer_count"],
-        "created_at": c["created_at"]
+        "expansion_percentage": c.get("expansion_percentage", 0),
+        "created_at": c.get("processed_at", c.get("created_at"))
     } for c in cities]
 
 @api_router.get("/cities/search")
 async def search_cities(q: str):
     """Search for a city by name"""
-    # Case-insensitive search
     cities = await db.processed.find(
         {"city_name": {"$regex": q, "$options": "i"}},
         {"_id": 0}
     ).to_list(20)
     
     if not cities:
-        # Find similar cities
         all_cities = await db.processed.find({}, {"_id": 0, "city_name": 1, "id": 1}).to_list(100)
         return {"found": False, "message": f"Sorry, we don't have '{q}' yet", "suggestions": all_cities[:6]}
     
@@ -616,63 +852,70 @@ async def get_city(city_id: str):
         raise HTTPException(status_code=404, detail="City not found")
     return city
 
-@api_router.get("/cities/{city_id}/svg")
-async def download_svg(city_id: str):
-    """Download city SVG file"""
+@api_router.get("/cities/{city_id}/layer/{layer_num}")
+async def download_layer(city_id: str, layer_num: int):
+    """Download a specific layer SVG"""
+    if layer_num not in [1, 2, 3]:
+        raise HTTPException(status_code=400, detail="Layer must be 1, 2, or 3")
+    
     city = await db.processed.find_one({"id": city_id}, {"_id": 0})
     if not city:
         raise HTTPException(status_code=404, detail="City not found")
     
-    svg_path = Path(city["svg_path"])
+    layer_path = Path(city.get(f"layer_{layer_num}_path", ""))
+    if not layer_path.exists():
+        raise HTTPException(status_code=404, detail=f"Layer {layer_num} not found")
+    
+    return FileResponse(
+        layer_path,
+        media_type="image/svg+xml",
+        filename=f"{city['city_name'].replace(' ', '_')}_layer_{layer_num}.svg"
+    )
+
+@api_router.get("/cities/{city_id}/all-layers")
+async def download_all_layers(city_id: str):
+    """Get all layer paths for download"""
+    city = await db.processed.find_one({"id": city_id}, {"_id": 0})
+    if not city:
+        raise HTTPException(status_code=404, detail="City not found")
+    
+    return {
+        "city_name": city["city_name"],
+        "layers": {
+            "layer_1": f"/api/cities/{city_id}/layer/1",
+            "layer_2": f"/api/cities/{city_id}/layer/2",
+            "layer_3": f"/api/cities/{city_id}/layer/3"
+        }
+    }
+
+@api_router.get("/cities/{city_id}/stage1")
+async def get_stage1_svg(city_id: str):
+    """Get Stage 1 SVG (single layer)"""
+    city = await db.processed.find_one({"id": city_id}, {"_id": 0})
+    if not city:
+        raise HTTPException(status_code=404, detail="City not found")
+    
+    svg_path = Path(city.get("stage1_svg_path", ""))
     if not svg_path.exists():
-        raise HTTPException(status_code=404, detail="SVG file not found")
+        raise HTTPException(status_code=404, detail="Stage 1 SVG not found")
     
     return FileResponse(
         svg_path,
         media_type="image/svg+xml",
-        filename=f"{city['city_name'].replace(' ', '_')}_layered.svg"
+        filename=f"{city['city_name'].replace(' ', '_')}_stage1.svg"
     )
-
-@api_router.get("/cities/{city_id}/png")
-async def download_png(city_id: str):
-    """Download city PNG preview"""
-    city = await db.processed.find_one({"id": city_id}, {"_id": 0})
-    if not city:
-        raise HTTPException(status_code=404, detail="City not found")
-    
-    png_path = Path(city["png_preview_path"])
-    if not png_path.exists():
-        raise HTTPException(status_code=404, detail="PNG file not found")
-    
-    return FileResponse(
-        png_path,
-        media_type="image/png",
-        filename=f"{city['city_name'].replace(' ', '_')}_preview.png"
-    )
-
-@api_router.get("/cities/{city_id}/styled")
-async def get_styled_image(city_id: str):
-    """Get the styled image"""
-    city = await db.processed.find_one({"id": city_id}, {"_id": 0})
-    if not city:
-        raise HTTPException(status_code=404, detail="City not found")
-    
-    styled_path = Path(city["styled_image_path"])
-    if not styled_path.exists():
-        raise HTTPException(status_code=404, detail="Styled image not found")
-    
-    return FileResponse(styled_path, media_type="image/png")
 
 # Featured cities
 @api_router.get("/featured")
 async def get_featured():
     """Get featured cities for homepage"""
-    cities = await db.processed.find({}, {"_id": 0}).sort("created_at", -1).to_list(9)
+    cities = await db.processed.find({}, {"_id": 0}).sort("processed_at", -1).to_list(9)
     return [{
         "id": c["id"],
         "city_name": c["city_name"],
         "style_name": c["style_name"],
-        "layer_count": c["layer_count"]
+        "layer_count": c["layer_count"],
+        "expansion_percentage": c.get("expansion_percentage", 0)
     } for c in cities]
 
 # Include the router
