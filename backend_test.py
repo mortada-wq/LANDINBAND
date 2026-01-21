@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Backend API Testing for Skyline Art Layerizer
+Backend API Testing for Layered Relief Art App
 Tests all API endpoints and functionality
 """
 
@@ -12,15 +12,15 @@ import io
 from datetime import datetime
 from pathlib import Path
 
-class SkylineAPITester:
+class LayeredReliefAPITester:
     def __init__(self, base_url="https://skyline-layerizer.preview.emergentagent.com"):
         self.base_url = base_url
         self.api_url = f"{base_url}/api"
         self.tests_run = 0
         self.tests_passed = 0
-        self.project_id = None
-        self.image_id = None
-        self.pdf_id = None
+        self.style_id = None
+        self.city_id = None
+        self.queue_item_id = None
 
     def log_test(self, name, success, details=""):
         """Log test result"""
