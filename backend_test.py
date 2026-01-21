@@ -232,114 +232,134 @@ startxref
                 return False
         return success
 
-    def test_create_project(self):
-        """Test creating a new project"""
-        project_data = {
-            "name": f"Test Project {datetime.now().strftime('%H%M%S')}"
+    def test_upload_style(self):
+        """Test uploading a style PDF"""
+        pdf_data = self.create_test_pdf()
+        files = {
+            'file': ('test_style.pdf', pdf_data, 'application/pdf'),
         }
-        success, data = self.run_test("Create Project", "POST", "projects", 200, project_data)
-        if success and 'id' in data:
-            self.project_id = data['id']
-            print(f"   Project created with ID: {self.project_id}")
-            return True
-        return success
-
-    def test_get_project(self):
-        """Test getting project details"""
-        if not self.project_id:
-            return self.log_test("Get Project", False, "No project ID available")
+        form_data = {
+            'name': f'Test Style {datetime.now().strftime("%H%M%S")}',
+            'description': 'Test style description'
+        }
         
-        success, data = self.run_test("Get Project", "GET", f"projects/{self.project_id}", 200)
-        if success:
-            expected_keys = ['id', 'name', 'status', 'created_at']
-            if all(key in data for key in expected_keys):
-                print(f"   Project details correct: {data}")
-                return True
-            else:
-                print(f"   Missing expected keys in project response")
-                return False
-        return success
-
-    def test_list_projects(self):
-        """Test listing all projects"""
-        success, data = self.run_test("List Projects", "GET", "projects", 200)
-        if success and isinstance(data, list):
-            print(f"   Found {len(data)} projects")
+        success, response_data = self.run_test("Upload Style", "POST", "styles", 200, files=files, form_data=form_data)
+        if success and 'id' in response_data:
+            self.style_id = response_data['id']
+            print(f"   Style uploaded with ID: {self.style_id}")
             return True
         return success
 
-    def test_upload_image(self):
-        """Test uploading an image"""
-        if not self.project_id:
-            return self.log_test("Upload Image", False, "No project ID available")
+    def test_list_styles(self):
+        """Test listing all styles"""
+        success, data = self.run_test("List Styles", "GET", "styles", 200)
+        if success and isinstance(data, list):
+            print(f"   Found {len(data)} styles")
+            if len(data) > 0:
+                # Check structure of first style
+                style = data[0]
+                expected_keys = ['id', 'name', 'description', 'filename', 'created_at']
+                if all(key in style for key in expected_keys):
+                    print(f"   Style structure correct")
+                    return True
+                else:
+                    print(f"   Missing expected keys in style response")
+                    return False
+            return True
+        return success
+
+    def test_upload_city(self):
+        """Test uploading a city image"""
+        if not self.style_id:
+            return self.log_test("Upload City", False, "No style ID available")
         
         image_data = self.create_test_image()
-        files = {'file': ('test_cityscape.png', image_data, 'image/png')}
+        files = {
+            'file': ('test_city.png', image_data, 'image/png'),
+        }
+        form_data = {
+            'city_name': f'Test City {datetime.now().strftime("%H%M%S")}',
+            'style_id': self.style_id
+        }
         
-        success, data = self.run_test("Upload Image", "POST", f"upload/image/{self.project_id}", 200, files=files)
-        if success and 'image_id' in data:
-            self.image_id = data['image_id']
-            print(f"   Image uploaded with ID: {self.image_id}")
+        success, response_data = self.run_test("Upload City", "POST", "cities/upload", 200, files=files, form_data=form_data)
+        if success and 'id' in response_data:
+            self.city_id = response_data['id']
+            print(f"   City uploaded with ID: {self.city_id}")
             return True
         return success
 
-    def test_upload_pdf(self):
-        """Test uploading a PDF"""
-        if not self.project_id:
-            return self.log_test("Upload PDF", False, "No project ID available")
-        
-        pdf_data = self.create_test_pdf()
-        files = {'file': ('test_style.pdf', pdf_data, 'application/pdf')}
-        
-        success, data = self.run_test("Upload PDF", "POST", f"upload/style/{self.project_id}", 200, files=files)
-        if success and 'pdf_id' in data:
-            self.pdf_id = data['pdf_id']
-            print(f"   PDF uploaded with ID: {self.pdf_id}")
+    def test_get_queue(self):
+        """Test getting processing queue"""
+        success, data = self.run_test("Get Queue", "GET", "queue", 200)
+        if success and isinstance(data, list):
+            print(f"   Found {len(data)} queue items")
+            if len(data) > 0:
+                # Check structure of first queue item
+                item = data[0]
+                expected_keys = ['id', 'city_name', 'style_id', 'style_name', 'status', 'progress', 'created_at', 'updated_at']
+                if all(key in item for key in expected_keys):
+                    print(f"   Queue item structure correct")
+                    self.queue_item_id = item['id']
+                    return True
+                else:
+                    print(f"   Missing expected keys in queue item response")
+                    return False
             return True
         return success
 
-    def test_get_file(self):
-        """Test getting file data"""
-        if not self.image_id:
-            return self.log_test("Get File", False, "No image ID available")
-        
-        success, data = self.run_test("Get File", "GET", f"files/{self.image_id}", 200)
+    def test_process_next_no_api_keys(self):
+        """Test process next without proper API keys (should fail gracefully)"""
+        success, data = self.run_test("Process Next (No API Keys)", "POST", "queue/process-next", 400)
+        # We expect this to fail with 400 due to missing API keys
+        if not success:
+            print(f"   Process next correctly failed due to API key issue (expected)")
+            return True
+        return False
+
+    def test_list_cities(self):
+        """Test listing processed cities"""
+        success, data = self.run_test("List Cities", "GET", "cities", 200)
+        if success and isinstance(data, list):
+            print(f"   Found {len(data)} processed cities")
+            return True
+        return success
+
+    def test_search_cities(self):
+        """Test searching for cities"""
+        success, data = self.run_test("Search Cities", "GET", "cities/search?q=test", 200)
         if success:
-            expected_keys = ['id', 'filename', 'content_type', 'data']
-            if all(key in data for key in expected_keys):
-                print(f"   File data retrieved correctly")
+            expected_keys = ['found']
+            if 'found' in data:
+                print(f"   Search response correct: found={data['found']}")
                 return True
             else:
-                print(f"   Missing expected keys in file response")
+                print(f"   Missing expected keys in search response")
                 return False
         return success
 
-    def test_process_stage1_without_api_key(self):
-        """Test Stage 1 processing without proper API key (should fail gracefully)"""
-        if not self.project_id:
-            return self.log_test("Process Stage 1 (No API Key)", False, "No project ID available")
-        
-        # This should fail because we're using test keys, not real ones
-        success, data = self.run_test("Process Stage 1 (Expected Fail)", "POST", f"process/stage1/{self.project_id}", 500)
-        # We expect this to fail with 500 due to invalid API key
-        if not success:
-            # Check if it failed for the right reason (API key issue)
-            print(f"   Stage 1 correctly failed due to API key issue (expected)")
+    def test_get_featured(self):
+        """Test getting featured cities"""
+        success, data = self.run_test("Get Featured Cities", "GET", "featured", 200)
+        if success and isinstance(data, list):
+            print(f"   Found {len(data)} featured cities")
             return True
-        return False
+        return success
 
-    def test_process_stage2_without_api_key(self):
-        """Test Stage 2 processing without proper API key (should fail gracefully)"""
-        if not self.project_id:
-            return self.log_test("Process Stage 2 (No API Key)", False, "No project ID available")
+    def test_delete_style(self):
+        """Test deleting a style"""
+        if not self.style_id:
+            return self.log_test("Delete Style", False, "No style ID available")
         
-        # This should fail because we're using test keys, not real ones
-        success, data = self.run_test("Process Stage 2 (Expected Fail)", "POST", f"process/stage2/{self.project_id}", 500)
-        # We expect this to fail with 500 due to invalid API key
-        if not success:
-            print(f"   Stage 2 correctly failed due to API key issue (expected)")
-            return True
-        return False
+        success, data = self.run_test("Delete Style", "DELETE", f"styles/{self.style_id}", 200)
+        if success:
+            if 'message' in data and 'deleted' in data['message'].lower():
+                print(f"   Style deleted successfully")
+                return True
+            else:
+                print(f"   Delete response incorrect: {data}")
+                return False
+        return success
 
     def test_invalid_endpoints(self):
         """Test invalid endpoints return proper errors"""
@@ -348,7 +368,7 @@ startxref
 
     def run_all_tests(self):
         """Run all backend tests"""
-        print("🚀 Starting Skyline Art Layerizer Backend Tests")
+        print("🚀 Starting Layered Relief Art App Backend Tests")
         print(f"   Base URL: {self.base_url}")
         print(f"   API URL: {self.api_url}")
         print("=" * 60)
@@ -357,24 +377,31 @@ startxref
         self.test_health_endpoint()
         self.test_root_endpoint()
         
+        # Admin authentication tests
+        self.test_admin_login_valid()
+        self.test_admin_login_invalid()
+        
         # Settings tests
         self.test_get_settings_initial()
         self.test_save_settings()
         self.test_get_settings_after_save()
         
-        # Project tests
-        self.test_create_project()
-        self.test_get_project()
-        self.test_list_projects()
+        # Style library tests
+        self.test_upload_style()
+        self.test_list_styles()
         
-        # File upload tests
-        self.test_upload_image()
-        self.test_upload_pdf()
-        self.test_get_file()
+        # City upload and queue tests
+        self.test_upload_city()
+        self.test_get_queue()
+        self.test_process_next_no_api_keys()
         
-        # Processing tests (expected to fail with test API keys)
-        self.test_process_stage1_without_api_key()
-        self.test_process_stage2_without_api_key()
+        # Public API tests
+        self.test_list_cities()
+        self.test_search_cities()
+        self.test_get_featured()
+        
+        # Cleanup tests
+        self.test_delete_style()
         
         # Error handling tests
         self.test_invalid_endpoints()
@@ -390,7 +417,7 @@ startxref
 
 def main():
     """Main test runner"""
-    tester = SkylineAPITester()
+    tester = LayeredReliefAPITester()
     passed, total = tester.run_all_tests()
     
     # Return appropriate exit code
