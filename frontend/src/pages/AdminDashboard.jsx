@@ -378,6 +378,14 @@ export default function AdminDashboard() {
             <Button variant="outline" size="sm" onClick={() => setShowSettings(true)} data-testid="settings-btn">
               <Settings className="w-4 h-4 mr-1" /> Settings
             </Button>
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => window.open(`${API}/docs/download`, '_blank')}
+              data-testid="docs-btn"
+            >
+              <Download className="w-4 h-4 mr-1" /> Docs
+            </Button>
             <Button variant="ghost" size="sm" onClick={logout} data-testid="logout-btn">
               <LogOut className="w-4 h-4" />
             </Button>
