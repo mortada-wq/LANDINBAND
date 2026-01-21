@@ -408,15 +408,18 @@ export default function AdminDashboard() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowSettings(false)}>
           <div className="bg-white rounded-lg p-6 max-w-md w-full m-4" onClick={e => e.stopPropagation()} data-testid="settings-modal">
             <h2 className="text-lg font-bold mb-4">API Settings</h2>
-            <div className="space-y-4">
-              <div>
-                <Label>Gemini API Key</Label>
-                <div className="relative">
+            <p className="text-sm text-gray-500 mb-4">Save each key separately</p>
+            <div className="space-y-6">
+              {/* Gemini Key */}
+              <div className="p-4 border border-gray-200 rounded-lg">
+                <Label className="font-semibold">Gemini API Key</Label>
+                <p className="text-xs text-gray-500 mb-2">For style transfer (vector line art)</p>
+                <div className="relative mb-3">
                   <Input
                     type={showGeminiKey ? "text" : "password"}
                     value={geminiKey}
                     onChange={(e) => setGeminiKey(e.target.value)}
-                    placeholder={settings.geminiKeySet ? "••••••••" : "Enter key"}
+                    placeholder={settings.geminiKeySet ? "••••••••" : "Enter Gemini key"}
                     data-testid="gemini-key-input"
                   />
                   <button
@@ -427,15 +430,32 @@ export default function AdminDashboard() {
                     {showGeminiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
+                <Button 
+                  className="w-full" 
+                  onClick={handleSaveGemini} 
+                  disabled={savingSettings || !geminiKey}
+                  data-testid="save-gemini-btn"
+                >
+                  {savingSettings ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                  Save Gemini Key
+                </Button>
+                {settings.geminiKeySet && (
+                  <p className="text-xs text-green-600 mt-2 flex items-center gap-1">
+                    <Check className="w-3 h-3" /> Gemini key is set
+                  </p>
+                )}
               </div>
-              <div>
-                <Label>Vision API Key</Label>
-                <div className="relative">
+
+              {/* Vision Key */}
+              <div className="p-4 border border-gray-200 rounded-lg">
+                <Label className="font-semibold">Vision API Key</Label>
+                <p className="text-xs text-gray-500 mb-2">For building detection</p>
+                <div className="relative mb-3">
                   <Input
                     type={showVisionKey ? "text" : "password"}
                     value={visionKey}
                     onChange={(e) => setVisionKey(e.target.value)}
-                    placeholder={settings.visionKeySet ? "••••••••" : "Enter key"}
+                    placeholder={settings.visionKeySet ? "••••••••" : "Enter Vision key"}
                     data-testid="vision-key-input"
                   />
                   <button
@@ -446,14 +466,25 @@ export default function AdminDashboard() {
                     {showVisionKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
-              </div>
-              <div className="flex gap-2">
-                <Button variant="outline" className="flex-1" onClick={() => setShowSettings(false)}>Cancel</Button>
-                <Button className="flex-1" onClick={handleSaveSettings} disabled={savingSettings} data-testid="save-settings-btn">
+                <Button 
+                  className="w-full" 
+                  onClick={handleSaveVision} 
+                  disabled={savingSettings || !visionKey}
+                  data-testid="save-vision-btn"
+                >
                   {savingSettings ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-                  Save
+                  Save Vision Key
                 </Button>
+                {settings.visionKeySet && (
+                  <p className="text-xs text-green-600 mt-2 flex items-center gap-1">
+                    <Check className="w-3 h-3" /> Vision key is set
+                  </p>
+                )}
               </div>
+
+              <Button variant="outline" className="w-full" onClick={() => setShowSettings(false)}>
+                Close
+              </Button>
             </div>
           </div>
         </div>
