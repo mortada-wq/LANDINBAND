@@ -788,6 +788,63 @@ export default function AdminDashboard() {
             )}
           </div>
         )}
+
+        {/* City Bank Tab */}
+        {activeTab === "citybank" && (
+          <div className="fade-in space-y-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold">City Bank</h2>
+                <p className="text-sm text-gray-500">All successfully processed cities</p>
+              </div>
+              <Button variant="outline" size="sm" onClick={fetchProcessedCities}>
+                <RefreshCw className="w-4 h-4 mr-1" /> Refresh
+              </Button>
+            </div>
+
+            {processedCities.length === 0 ? (
+              <div className="text-center py-12 text-gray-500">
+                <ImageIcon className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                <p>No cities processed yet.</p>
+                <p className="text-sm">Upload a city and process it to see it here!</p>
+              </div>
+            ) : (
+              <div className="grid sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+                {processedCities.map((city) => (
+                  <a
+                    key={city.id}
+                    href={`/city/${city.id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block border border-gray-200 rounded-lg overflow-hidden hover:shadow-lg transition-shadow"
+                    data-testid={`citybank-card-${city.id}`}
+                  >
+                    <div className="aspect-video bg-gray-100 relative">
+                      <img
+                        src={`${API}/cities/${city.id}/styled`}
+                        alt={city.city_name}
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          e.target.style.display = 'none';
+                        }}
+                      />
+                      <div className="absolute top-2 right-2 bg-green-500 text-white text-xs px-2 py-1 rounded">
+                        {city.layer_count} layers
+                      </div>
+                    </div>
+                    <div className="p-4">
+                      <h3 className="font-semibold text-lg">{city.city_name}</h3>
+                      <p className="text-sm text-gray-500">{city.style_name}</p>
+                      <p className="text-xs text-gray-400 mt-2">
+                        {city.building_count} buildings • {new Date(city.created_at).toLocaleDateString()}
+                      </p>
+                    </div>
+                  </a>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </main>
     </div>
   );
