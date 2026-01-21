@@ -64,6 +64,7 @@ export default function AdminDashboard() {
     if (isAdmin) {
       fetchStyles();
       fetchQueue();
+      fetchProcessedCities();
       const interval = setInterval(fetchQueue, 30000); // Auto-refresh every 30s
       return () => clearInterval(interval);
     }
@@ -86,6 +87,16 @@ export default function AdminDashboard() {
       setQueue(data);
     } catch (e) {
       console.error("Failed to fetch queue:", e);
+    }
+  };
+
+  const fetchProcessedCities = async () => {
+    try {
+      const res = await fetch(`${API}/cities`);
+      const data = await res.json();
+      setProcessedCities(data);
+    } catch (e) {
+      console.error("Failed to fetch processed cities:", e);
     }
   };
 
