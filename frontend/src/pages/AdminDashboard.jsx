@@ -738,7 +738,16 @@ export default function AdminDashboard() {
                             <X className="w-4 h-4" />
                           </Button>
                         )}
-                        {item.status === "done" && <Check className="w-5 h-5 text-green-600" />}
+                        {item.status === "done" && (
+                          <a 
+                            href={`/city/${item.id}`} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 font-medium"
+                          >
+                            <Eye className="w-4 h-4" /> View Result
+                          </a>
+                        )}
                         {item.status === "error" && (
                           <span className="text-xs text-red-600" title={item.error_message}>
                             {item.error_message?.substring(0, 30)}...
