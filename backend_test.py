@@ -32,7 +32,7 @@ class LayeredReliefAPITester:
             print(f"❌ {name} - {details}")
         return success
 
-    def run_test(self, name, method, endpoint, expected_status, data=None, files=None):
+    def run_test(self, name, method, endpoint, expected_status, data=None, files=None, form_data=None):
         """Run a single API test"""
         url = f"{self.api_url}/{endpoint}"
         headers = {}
@@ -45,7 +45,8 @@ class LayeredReliefAPITester:
                 response = requests.get(url, headers=headers, timeout=30)
             elif method == 'POST':
                 if files:
-                    response = requests.post(url, files=files, timeout=30)
+                    # For multipart form data with files
+                    response = requests.post(url, files=files, data=form_data, timeout=30)
                 else:
                     headers['Content-Type'] = 'application/json'
                     response = requests.post(url, json=data, headers=headers, timeout=30)
