@@ -191,6 +191,18 @@ async def root():
 async def health():
     return {"status": "healthy"}
 
+@api_router.get("/docs/download")
+async def download_docs():
+    """Download the documentation file"""
+    docs_path = Path("/app/DOCUMENTATION.md")
+    if docs_path.exists():
+        return FileResponse(
+            docs_path,
+            media_type="text/markdown",
+            filename="Layered_Relief_Art_Documentation.md"
+        )
+    raise HTTPException(status_code=404, detail="Documentation not found")
+
 # Admin Authentication
 @api_router.post("/admin/login")
 async def admin_login(login: AdminLogin):
