@@ -400,6 +400,19 @@ export default function AdminDashboard() {
               </span>
             )}
           </button>
+          <button
+            className={`tab-button ${activeTab === "citybank" ? "active" : ""}`}
+            onClick={() => setActiveTab("citybank")}
+            data-testid="tab-citybank"
+          >
+            <ImageIcon className="w-4 h-4 inline mr-2" />
+            City Bank
+            {processedCities.length > 0 && (
+              <span className="ml-2 bg-green-600 text-white text-xs px-2 py-0.5 rounded-full">
+                {processedCities.length}
+              </span>
+            )}
+          </button>
         </div>
       </header>
 
