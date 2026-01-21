@@ -37,7 +37,6 @@ function App() {
       const data = await res.json();
       setSettings({
         geminiKeySet: data.gemini_api_key_set,
-        visionKeySet: data.vision_api_key_set,
       });
     } catch (e) {
       console.error("Failed to fetch settings:", e);
