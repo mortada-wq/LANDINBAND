@@ -99,10 +99,10 @@ export default function AdminDashboard() {
     }
   };
 
-  // Save settings
-  const handleSaveSettings = async () => {
-    if (!geminiKey && !visionKey) {
-      toast.error("Enter at least one API key");
+  // Save settings - individual keys
+  const handleSaveGemini = async () => {
+    if (!geminiKey) {
+      toast.error("Enter your Gemini API key");
       return;
     }
     setSavingSettings(true);
@@ -110,20 +110,44 @@ export default function AdminDashboard() {
       const res = await fetch(`${API}/settings`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          gemini_api_key: geminiKey,
-          vision_api_key: visionKey,
-        }),
+        body: JSON.stringify({ gemini_api_key: geminiKey }),
       });
+      const data = await res.json();
       if (res.ok) {
-        toast.success("API keys saved!");
+        toast.success(data.message);
         fetchSettings();
         setGeminiKey("");
-        setVisionKey("");
-        setShowSettings(false);
+      } else {
+        toast.error(data.detail || "Failed to save");
       }
     } catch (e) {
-      toast.error("Failed to save settings");
+      toast.error("Failed to save Gemini key");
+    }
+    setSavingSettings(false);
+  };
+
+  const handleSaveVision = async () => {
+    if (!visionKey) {
+      toast.error("Enter your Vision API key");
+      return;
+    }
+    setSavingSettings(true);
+    try {
+      const res = await fetch(`${API}/settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vision_api_key: visionKey }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(data.message);
+        fetchSettings();
+        setVisionKey("");
+      } else {
+        toast.error(data.detail || "Failed to save");
+      }
+    } catch (e) {
+      toast.error("Failed to save Vision key");
     }
     setSavingSettings(false);
   };
