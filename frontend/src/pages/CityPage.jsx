@@ -29,24 +29,19 @@ export default function CityPage() {
     setLoading(false);
   };
 
-  const downloadSvg = () => {
-    window.open(`${API}/cities/${cityId}/svg`, "_blank");
+  const downloadLayer = (layerNum) => {
+    window.open(`${API}/cities/${cityId}/layer/${layerNum}`, "_blank");
   };
 
-  const downloadPng = () => {
-    window.open(`${API}/cities/${cityId}/png`, "_blank");
+  const downloadStage1 = () => {
+    window.open(`${API}/cities/${cityId}/stage1`, "_blank");
   };
 
-  // Layer colors for visualization
+  // Layer colors
   const layerColors = [
-    "bg-blue-500",
-    "bg-green-500",
-    "bg-yellow-500",
-    "bg-orange-500",
-    "bg-red-500",
-    "bg-purple-500",
-    "bg-pink-500",
-    "bg-indigo-500",
+    { bg: "bg-red-100", border: "border-red-500", text: "text-red-700", label: "Layer 1 - Foreground (Nearest)" },
+    { bg: "bg-yellow-100", border: "border-yellow-500", text: "text-yellow-700", label: "Layer 2 - Middle Ground" },
+    { bg: "bg-blue-100", border: "border-blue-500", text: "text-blue-700", label: "Layer 3 - Background (Farthest)" },
   ];
 
   if (loading) {
@@ -83,100 +78,152 @@ export default function CityPage() {
 
       {/* Main Content */}
       <main className="max-w-6xl mx-auto px-4 py-12" data-testid="city-page">
+        {/* Title */}
+        <div className="text-center mb-12">
+          <h1 className="text-4xl font-bold mb-2" data-testid="city-name">{city.city_name}</h1>
+          <p className="text-gray-600">Style: {city.style_name}</p>
+          {city.expansion_percentage > 0 && (
+            <p className="text-blue-600 mt-1">+{city.expansion_percentage}% horizontal spacing applied</p>
+          )}
+        </div>
+
         <div className="grid md:grid-cols-2 gap-12">
-          {/* Left - Preview */}
+          {/* Left - Layer Downloads */}
           <div>
-            <div className="aspect-video bg-gray-100 rounded-lg overflow-hidden mb-4 flex items-center justify-center" data-testid="city-preview">
-              <img
-                src={`${API}/cities/${cityId}/styled`}
-                alt={city.city_name}
-                className="max-w-full max-h-full object-contain"
-                onError={(e) => {
-                  e.target.style.display = "none";
-                  e.target.parentElement.innerHTML = '<div class="text-gray-400"><svg class="w-16 h-16 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg><p class="mt-2">Preview</p></div>';
-                }}
-              />
-            </div>
+            <h2 className="text-xl font-semibold mb-6 flex items-center gap-2">
+              <Download className="w-5 h-5" /> Download Layers
+            </h2>
             
-            {/* Download Buttons */}
-            <div className="flex gap-4">
-              <Button className="flex-1" onClick={downloadSvg} data-testid="download-svg-btn">
-                <Download className="w-4 h-4 mr-2" /> Download SVG (Laser Ready)
-              </Button>
-              <Button variant="outline" className="flex-1" onClick={downloadPng} data-testid="download-png-btn">
-                <Download className="w-4 h-4 mr-2" /> Download PNG
+            {/* 3 Layer Cards */}
+            <div className="space-y-4">
+              {[1, 2, 3].map((layerNum) => (
+                <div
+                  key={layerNum}
+                  className={`p-4 rounded-lg border-2 ${layerColors[layerNum - 1].border} ${layerColors[layerNum - 1].bg}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className={`font-semibold ${layerColors[layerNum - 1].text}`}>
+                        {layerColors[layerNum - 1].label}
+                      </h3>
+                      <p className="text-sm text-gray-600">
+                        {layerNum === 1 && "Shortest buildings (height 0-3)"}
+                        {layerNum === 2 && "Medium buildings (height 3-6)"}
+                        {layerNum === 3 && "Tallest buildings (height 6-10)"}
+                      </p>
+                    </div>
+                    <Button
+                      onClick={() => downloadLayer(layerNum)}
+                      className="bg-black text-white hover:bg-gray-800"
+                      data-testid={`download-layer-${layerNum}-btn`}
+                    >
+                      <Download className="w-4 h-4 mr-2" /> SVG
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Stage 1 Download */}
+            <div className="mt-6 p-4 rounded-lg border border-gray-200 bg-gray-50">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-semibold text-gray-700">Stage 1 Output (All Buildings)</h3>
+                  <p className="text-sm text-gray-500">Single SVG with all buildings combined</p>
+                </div>
+                <Button variant="outline" onClick={downloadStage1} data-testid="download-stage1-btn">
+                  <Download className="w-4 h-4 mr-2" /> SVG
+                </Button>
+              </div>
+            </div>
+
+            {/* Download All */}
+            <div className="mt-6 flex gap-3">
+              <Button
+                className="flex-1 bg-gradient-to-r from-red-500 via-yellow-500 to-blue-500 text-white"
+                onClick={() => {
+                  downloadLayer(1);
+                  setTimeout(() => downloadLayer(2), 500);
+                  setTimeout(() => downloadLayer(3), 1000);
+                }}
+                data-testid="download-all-btn"
+              >
+                <Download className="w-4 h-4 mr-2" /> Download All 3 Layers
               </Button>
             </div>
           </div>
 
-          {/* Right - Info */}
+          {/* Right - Info & Instructions */}
           <div>
-            <h1 className="text-4xl font-bold mb-2" data-testid="city-name">{city.city_name}</h1>
-            <p className="text-gray-600 mb-8">Style: {city.style_name}</p>
-
             {/* Layer Visualization */}
             <div className="mb-8">
-              <h2 className="text-lg font-semibold mb-4 flex items-center">
-                <Layers className="w-5 h-5 mr-2" /> Layer Stack ({city.layer_count} layers)
+              <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                <Layers className="w-5 h-5" /> Layer Stack Preview
               </h2>
-              <div className="layer-stack" data-testid="layer-stack">
-                {city.buildings?.map((building, index) => (
-                  <div
-                    key={index}
-                    className={`layer-bar ${layerColors[index % layerColors.length]} text-white`}
-                    data-testid={`layer-${index}`}
-                  >
-                    Layer {building.layer || index + 1}: {building.name}
-                  </div>
-                ))}
+              <div className="relative h-48 bg-gray-100 rounded-lg overflow-hidden">
+                {/* Stacked layer visualization */}
+                <div className="absolute inset-x-4 top-4 h-12 bg-blue-200 border-2 border-blue-500 rounded flex items-center justify-center text-sm font-medium text-blue-700">
+                  Layer 3 - Background (Farthest)
+                </div>
+                <div className="absolute inset-x-8 top-16 h-12 bg-yellow-200 border-2 border-yellow-500 rounded flex items-center justify-center text-sm font-medium text-yellow-700">
+                  Layer 2 - Middle
+                </div>
+                <div className="absolute inset-x-12 top-28 h-12 bg-red-200 border-2 border-red-500 rounded flex items-center justify-center text-sm font-medium text-red-700">
+                  Layer 1 - Foreground (Nearest)
+                </div>
               </div>
-              <p className="text-sm text-gray-500 mt-4">
-                Front layers (1) are closest to the viewer. Back layers are further away.
+              <p className="text-sm text-gray-500 mt-2 text-center">
+                Stack layers with spacers for 3D relief effect
               </p>
             </div>
 
             {/* Instructions */}
             <div className="bg-gray-50 rounded-lg p-6">
-              <h2 className="text-lg font-semibold mb-4 flex items-center">
-                <FileText className="w-5 h-5 mr-2" /> How to Use
+              <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                <FileText className="w-5 h-5" /> How to Use These Files
               </h2>
               <ol className="space-y-3 text-gray-700">
                 <li className="flex gap-3">
                   <span className="font-bold">1.</span>
-                  <span>Download the SVG file using the button above</span>
+                  <span>Download all 3 layer SVG files</span>
                 </li>
                 <li className="flex gap-3">
                   <span className="font-bold">2.</span>
-                  <span>Open in your laser cutter software (LightBurn, LaserGRBL, etc.)</span>
+                  <span>Import each SVG into your laser cutter software</span>
                 </li>
                 <li className="flex gap-3">
                   <span className="font-bold">3.</span>
-                  <span>Each building is on a separate layer - assign different cut depths</span>
+                  <span>Cut each layer from material of your choice:</span>
+                </li>
+                <li className="pl-8 text-sm text-gray-600">
+                  • Layer 3 (back): Thickest material (e.g., 6mm plywood)<br />
+                  • Layer 2 (mid): Medium thickness (e.g., 4mm)<br />
+                  • Layer 1 (front): Thinnest (e.g., 3mm)
                 </li>
                 <li className="flex gap-3">
                   <span className="font-bold">4.</span>
-                  <span>Cut on layered material (wood, acrylic, cardboard)</span>
+                  <span>Stack layers with 3-5mm spacers between each</span>
                 </li>
                 <li className="flex gap-3">
                   <span className="font-bold">5.</span>
-                  <span>Stack the layers with spacers for 3D relief effect</span>
+                  <span>Glue or pin together for final 3D relief art!</span>
                 </li>
               </ol>
             </div>
 
             {/* Stats */}
-            <div className="grid grid-cols-3 gap-4 mt-8">
-              <div className="text-center p-4 bg-gray-50 rounded-lg">
-                <p className="text-2xl font-bold">{city.building_count}</p>
-                <p className="text-sm text-gray-500">Buildings</p>
-              </div>
+            <div className="grid grid-cols-3 gap-4 mt-6">
               <div className="text-center p-4 bg-gray-50 rounded-lg">
                 <p className="text-2xl font-bold">{city.layer_count}</p>
                 <p className="text-sm text-gray-500">Layers</p>
               </div>
               <div className="text-center p-4 bg-gray-50 rounded-lg">
-                <p className="text-2xl font-bold">{city.processing_time_seconds?.toFixed(1)}s</p>
-                <p className="text-sm text-gray-500">Process Time</p>
+                <p className="text-2xl font-bold">{city.expansion_percentage || 0}%</p>
+                <p className="text-sm text-gray-500">Spacing</p>
+              </div>
+              <div className="text-center p-4 bg-gray-50 rounded-lg">
+                <p className="text-2xl font-bold">SVG</p>
+                <p className="text-sm text-gray-500">Format</p>
               </div>
             </div>
           </div>
