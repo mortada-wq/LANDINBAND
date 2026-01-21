@@ -2,9 +2,11 @@ import { useState, useEffect, createContext, useContext } from "react";
 import "@/App.css";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Toaster } from "@/components/ui/sonner";
-import { Workspace } from "@/pages/Workspace";
+import AdminDashboard from "@/pages/AdminDashboard";
+import PublicHome from "@/pages/PublicHome";
+import CityPage from "@/pages/CityPage";
 
-// Create context for app state
+// App context
 export const AppContext = createContext(null);
 
 export const useApp = () => {
@@ -17,15 +19,15 @@ const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 export const API = `${BACKEND_URL}/api`;
 
 function App() {
-  const [settings, setSettings] = useState({
-    geminiKeySet: false,
-    visionKeySet: false,
-  });
-  const [currentProject, setCurrentProject] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [settings, setSettings] = useState({ geminiKeySet: false, visionKeySet: false });
 
-  // Fetch settings on mount
+  // Check for admin session
   useEffect(() => {
+    const adminSession = localStorage.getItem("admin_session");
+    if (adminSession) {
+      setIsAdmin(true);
+    }
     fetchSettings();
   }, []);
 
@@ -42,27 +44,49 @@ function App() {
     }
   };
 
+  const login = async (email, password) => {
+    try {
+      const res = await fetch(`${API}/admin/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      if (res.ok) {
+        localStorage.setItem("admin_session", "true");
+        setIsAdmin(true);
+        return { success: true };
+      }
+      return { success: false, error: "Wrong credentials" };
+    } catch (e) {
+      return { success: false, error: "Connection error" };
+    }
+  };
+
+  const logout = () => {
+    localStorage.removeItem("admin_session");
+    setIsAdmin(false);
+  };
+
   const contextValue = {
+    isAdmin,
     settings,
     setSettings,
-    currentProject,
-    setCurrentProject,
-    isLoading,
-    setIsLoading,
     fetchSettings,
+    login,
+    logout,
     API,
   };
 
   return (
     <AppContext.Provider value={contextValue}>
-      <div className="min-h-screen bg-[#050505] bg-grid">
-        <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<Workspace />} />
-          </Routes>
-        </BrowserRouter>
-        <Toaster richColors position="bottom-right" />
-      </div>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<PublicHome />} />
+          <Route path="/city/:cityId" element={<CityPage />} />
+          <Route path="/admin" element={<AdminDashboard />} />
+        </Routes>
+      </BrowserRouter>
+      <Toaster position="bottom-right" />
     </AppContext.Provider>
   );
 }
