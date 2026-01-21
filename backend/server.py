@@ -106,8 +106,8 @@ class ProcessedCity(BaseModel):
     created_at: str
 
 class SettingsInput(BaseModel):
-    gemini_api_key: str
-    vision_api_key: str
+    gemini_api_key: Optional[str] = None
+    vision_api_key: Optional[str] = None
 
 class SettingsResponse(BaseModel):
     gemini_api_key_set: bool
