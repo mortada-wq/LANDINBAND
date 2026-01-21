@@ -55,6 +55,9 @@ export default function AdminDashboard() {
   // Queue state
   const [queue, setQueue] = useState([]);
   const [processing, setProcessing] = useState(false);
+  
+  // City Bank state
+  const [processedCities, setProcessedCities] = useState([]);
 
   // Fetch data on mount
   useEffect(() => {
