@@ -202,15 +202,28 @@ async def admin_login(login: AdminLogin):
 # Settings
 @api_router.post("/settings")
 async def save_settings(settings: SettingsInput):
-    """Save API keys"""
+    """Save API keys - can save one at a time"""
+    # Get existing settings first
+    existing = await db.settings.find_one({}, {"_id": 0}) or {}
+    
+    # Only update the key that was provided
     doc = {
-        "gemini_api_key": settings.gemini_api_key,
-        "vision_api_key": settings.vision_api_key,
+        "gemini_api_key": settings.gemini_api_key if settings.gemini_api_key else existing.get("gemini_api_key", ""),
+        "vision_api_key": settings.vision_api_key if settings.vision_api_key else existing.get("vision_api_key", ""),
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
+    
     await db.settings.delete_many({})
     await db.settings.insert_one(doc)
-    return {"success": True, "message": "API keys saved!"}
+    
+    # Tell user which key was saved
+    saved_keys = []
+    if settings.gemini_api_key:
+        saved_keys.append("Gemini")
+    if settings.vision_api_key:
+        saved_keys.append("Vision")
+    
+    return {"success": True, "message": f"{' & '.join(saved_keys)} API key saved!"}
 
 @api_router.get("/settings", response_model=SettingsResponse)
 async def get_settings():
