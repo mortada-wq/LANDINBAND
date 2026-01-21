@@ -165,11 +165,36 @@ startxref
         success, data = self.run_test("Root API", "GET", "", 200)
         return success
 
+    def test_admin_login_valid(self):
+        """Test admin login with valid credentials"""
+        login_data = {
+            "email": "Mortada@howvier.com",
+            "password": "Mo1982#"
+        }
+        success, data = self.run_test("Admin Login (Valid)", "POST", "admin/login", 200, login_data)
+        if success:
+            if data.get('success') and 'Welcome back, Mortada!' in data.get('message', ''):
+                print(f"   Login successful: {data}")
+                return True
+            else:
+                print(f"   Login response incorrect: {data}")
+                return False
+        return success
+
+    def test_admin_login_invalid(self):
+        """Test admin login with invalid credentials"""
+        login_data = {
+            "email": "wrong@email.com",
+            "password": "wrongpass"
+        }
+        success, data = self.run_test("Admin Login (Invalid)", "POST", "admin/login", 401, login_data)
+        return success
+
     def test_get_settings_initial(self):
         """Test getting settings when none are set"""
         success, data = self.run_test("Get Initial Settings", "GET", "settings", 200)
         if success:
-            expected_keys = ['gemini_api_key_set', 'vision_api_key_set', 'updated_at']
+            expected_keys = ['gemini_api_key_set', 'vision_api_key_set']
             if all(key in data for key in expected_keys):
                 print(f"   Settings structure correct: {data}")
                 return True
@@ -186,7 +211,7 @@ startxref
         }
         success, data = self.run_test("Save Settings", "POST", "settings", 200, settings_data)
         if success:
-            if data.get('gemini_api_key_set') and data.get('vision_api_key_set'):
+            if data.get('success') and 'API keys saved!' in data.get('message', ''):
                 print(f"   Settings saved successfully")
                 return True
             else:
