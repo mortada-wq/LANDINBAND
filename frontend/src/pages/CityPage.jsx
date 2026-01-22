@@ -12,7 +12,21 @@ export default function CityPage() {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    fetchCity();
+    const fetchCityData = async () => {
+      try {
+        const res = await fetch(`${API}/cities/${cityId}`);
+        if (!res.ok) {
+          throw new Error("City not found");
+        }
+        const data = await res.json();
+        setCity(data);
+      } catch (e) {
+        setError(e.message);
+      }
+      setLoading(false);
+    };
+    
+    fetchCityData();
   }, [cityId]);
 
   const fetchCity = async () => {

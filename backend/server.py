@@ -19,7 +19,7 @@ from PIL import Image
 import xml.etree.ElementTree as ET
 
 # Gemini integration
-from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+from google import genai
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -266,6 +266,9 @@ async def download_docs():
 @api_router.post("/admin/login")
 async def admin_login(login: AdminLogin):
     """Verify admin login"""
+    # Log only email domain for security
+    email_domain = login.email.split('@')[1] if '@' in login.email else 'unknown'
+    logger.info(f"Login attempt from domain: {email_domain}")
     if login.email.lower() == ADMIN_EMAIL.lower() and login.password == ADMIN_PASSWORD:
         return {"success": True, "message": "Welcome back, Mortada!"}
     raise HTTPException(status_code=401, detail="Wrong credentials. Check your sticky note.")
@@ -444,16 +447,13 @@ async def process_stage1(city_id: str):
         await db.queue.update_one({"id": city_id}, {"$set": {"progress": 30}})
         
         # Gemini Style Transfer
-        chat = LlmChat(
-            api_key=settings["gemini_api_key"],
-            session_id=f"stage1-{city_id}",
-            system_message="You are a vector line art specialist creating clean SVG artwork for laser cutting."
-        )
-        chat.with_model("gemini", "gemini-2.0-flash-exp").with_params(temperature=0.7)
+        client = genai.Client(api_key=settings["gemini_api_key"])
         
         style_instructions = f"Apply this artistic style: {style_text}" if style_text else "Use clean architectural line art style"
         
-        prompt = f"""Transform this city skyline photograph into a clean vector line art SVG.
+        prompt = f"""You are a vector line art specialist creating clean SVG artwork for laser cutting.
+
+Transform this city skyline photograph into a clean vector line art SVG.
 
 {style_instructions}
 
@@ -469,8 +469,20 @@ OUTPUT REQUIREMENTS:
 Return ONLY the complete SVG code starting with <?xml and ending with </svg>
 Do not include any explanation or markdown - just the raw SVG."""
 
-        msg = UserMessage(text=prompt, file_contents=[ImageContent(image_b64)])
-        response = await chat.send_message(msg)
+        # Determine MIME type from file extension
+        file_ext = Path(item["original_filepath"]).suffix.lower()
+        mime_types = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp'}
+        mime_type = mime_types.get(file_ext, 'image/jpeg')
+        
+        # Create image content
+        image_part = genai.types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+        
+        result = await client.aio.models.generate_content(
+            model="gemini-2.0-flash-exp",
+            contents=[prompt, image_part],
+            config=genai.types.GenerateContentConfig(temperature=0.7)
+        )
+        response = result.text
         
         await db.queue.update_one({"id": city_id}, {"$set": {"progress": 70}})
         
@@ -663,14 +675,11 @@ async def process_stage2(city_id: str):
         await db.queue.update_one({"id": city_id}, {"$set": {"progress": 30}})
         
         # Gemini Layer Separation
-        chat = LlmChat(
-            api_key=settings["gemini_api_key"],
-            session_id=f"stage2-{city_id}",
-            system_message="You are an expert at analyzing city skyline SVG artwork and separating buildings into depth layers for laser cutting."
-        )
-        chat.with_model("gemini", "gemini-2.0-flash-exp").with_params(temperature=0.3)
+        client = genai.Client(api_key=settings["gemini_api_key"])
         
-        prompt = f"""You are analyzing a city skyline vector line art SVG for laser cutting.
+        prompt = f"""You are an expert at analyzing city skyline SVG artwork and separating buildings into depth layers for laser cutting.
+
+You are analyzing a city skyline vector line art SVG for laser cutting.
 
 INPUT SVG:
 {input_svg}
@@ -717,8 +726,12 @@ Return ONLY a JSON object with three SVG strings:
 
 No explanation, no markdown - just the JSON object."""
 
-        msg = UserMessage(text=prompt)
-        response = await chat.send_message(msg)
+        result = await client.aio.models.generate_content(
+            model="gemini-2.0-flash-exp",
+            contents=prompt,
+            config=genai.types.GenerateContentConfig(temperature=0.3)
+        )
+        response = result.text
         
         await db.queue.update_one({"id": city_id}, {"$set": {"progress": 70}})
         
