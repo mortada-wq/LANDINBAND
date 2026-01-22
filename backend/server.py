@@ -46,9 +46,9 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Hardcoded admin credentials
-ADMIN_EMAIL = "Mortada@howvier.com"
-ADMIN_PASSWORD = "Mo1982#"
+# Admin credentials from environment (safe for public repo)
+ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'admin@example.com')
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'changeme123')
 
 # Models
 class AdminLogin(BaseModel):
