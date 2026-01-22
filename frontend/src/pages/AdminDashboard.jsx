@@ -7,6 +7,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Slider } from "@/components/ui/slider";
+import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { 
   Upload, 
   Image as ImageIcon, 
@@ -25,7 +34,19 @@ import {
   Layers,
   MoveHorizontal,
   Play,
-  ChevronRight
+  ChevronRight,
+  Search,
+  Archive,
+  RotateCcw,
+  BarChart3,
+  Globe,
+  Palette,
+  Plus,
+  Filter,
+  Grid,
+  List,
+  MoreHorizontal,
+  Edit
 } from "lucide-react";
 
 export default function AdminDashboard() {
@@ -68,19 +89,15 @@ export default function AdminDashboard() {
   
   // City Bank state
   const [processedCities, setProcessedCities] = useState([]);
+  const [cityBankStats, setCityBankStats] = useState(null);
+  const [cityBankSearch, setCityBankSearch] = useState("");
+  const [cityBankStatusFilter, setCityBankStatusFilter] = useState("all");
+  const [cityBankViewMode, setCityBankViewMode] = useState("grid");
+  const [selectedCities, setSelectedCities] = useState([]);
+  const [editingCity, setEditingCity] = useState(null);
 
-  // Fetch data on mount
-  useEffect(() => {
-    if (isAdmin) {
-      fetchStyles();
-      fetchQueue();
-      fetchProcessedCities();
-      const interval = setInterval(fetchQueue, 10000);
-      return () => clearInterval(interval);
-    }
-  }, [isAdmin]);
-
-  const fetchStyles = async () => {
+  // Fetch functions wrapped in useCallback
+  const fetchStyles = useCallback(async () => {
     try {
       const res = await fetch(`${API}/styles`);
       const data = await res.json();
@@ -88,9 +105,9 @@ export default function AdminDashboard() {
     } catch (e) {
       console.error("Failed to fetch styles:", e);
     }
-  };
+  }, []);
 
-  const fetchQueue = async () => {
+  const fetchQueue = useCallback(async () => {
     try {
       const res = await fetch(`${API}/queue`);
       const data = await res.json();
@@ -98,17 +115,165 @@ export default function AdminDashboard() {
     } catch (e) {
       console.error("Failed to fetch queue:", e);
     }
-  };
+  }, []);
 
-  const fetchProcessedCities = async () => {
+  const fetchProcessedCities = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/cities`);
+      let url = `${API}/citybank/cities`;
+      const params = new URLSearchParams();
+      if (cityBankSearch) params.append("search", cityBankSearch);
+      if (cityBankStatusFilter && cityBankStatusFilter !== "all") params.append("status", cityBankStatusFilter);
+      if (params.toString()) url += `?${params.toString()}`;
+      
+      const res = await fetch(url);
       const data = await res.json();
       setProcessedCities(data);
     } catch (e) {
       console.error("Failed to fetch processed cities:", e);
+      // Fallback to old endpoint
+      try {
+        const res = await fetch(`${API}/cities`);
+        const data = await res.json();
+        setProcessedCities(data);
+      } catch (e2) {
+        console.error("Failed to fetch cities:", e2);
+      }
+    }
+  }, [cityBankSearch, cityBankStatusFilter]);
+
+  const fetchCityBankStats = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/citybank/stats`);
+      const data = await res.json();
+      setCityBankStats(data);
+    } catch (e) {
+      console.error("Failed to fetch city bank stats:", e);
+    }
+  }, []);
+
+  // Fetch data on mount
+  useEffect(() => {
+    if (isAdmin) {
+      fetchStyles();
+      fetchQueue();
+      fetchProcessedCities();
+      fetchCityBankStats();
+      const interval = setInterval(fetchQueue, 10000);
+      return () => clearInterval(interval);
+    }
+  }, [isAdmin, fetchStyles, fetchQueue, fetchProcessedCities, fetchCityBankStats]);
+
+  // City Bank actions
+  const handleArchiveCity = async (cityId) => {
+    try {
+      const res = await fetch(`${API}/citybank/cities/${cityId}/archive`, { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(data.message);
+        fetchProcessedCities();
+        fetchCityBankStats();
+      } else {
+        toast.error(data.detail || "Archive failed");
+      }
+    } catch (e) {
+      toast.error("Archive failed");
     }
   };
+
+  const handleRestoreCity = async (cityId) => {
+    try {
+      const res = await fetch(`${API}/citybank/cities/${cityId}/restore`, { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(data.message);
+        fetchProcessedCities();
+        fetchCityBankStats();
+      } else {
+        toast.error(data.detail || "Restore failed");
+      }
+    } catch (e) {
+      toast.error("Restore failed");
+    }
+  };
+
+  const handleDeleteCity = async (cityId) => {
+    if (!window.confirm("This will permanently delete this city and all its files. Are you sure?")) return;
+    try {
+      const res = await fetch(`${API}/citybank/cities/${cityId}`, { method: "DELETE" });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(data.message);
+        fetchProcessedCities();
+        fetchCityBankStats();
+      } else {
+        toast.error(data.detail || "Delete failed");
+      }
+    } catch (e) {
+      toast.error("Delete failed");
+    }
+  };
+
+  const handleBulkArchive = async () => {
+    if (selectedCities.length === 0) {
+      toast.error("Select cities first");
+      return;
+    }
+    if (!window.confirm(`Archive ${selectedCities.length} cities?`)) return;
+    try {
+      const res = await fetch(`${API}/citybank/bulk/archive`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(selectedCities),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(`${data.archived_count} cities archived`);
+        setSelectedCities([]);
+        fetchProcessedCities();
+        fetchCityBankStats();
+      } else {
+        toast.error(data.detail || "Bulk archive failed");
+      }
+    } catch (e) {
+      toast.error("Bulk archive failed");
+    }
+  };
+
+  const toggleCitySelection = (cityId) => {
+    setSelectedCities(prev => 
+      prev.includes(cityId) 
+        ? prev.filter(id => id !== cityId)
+        : [...prev, cityId]
+    );
+  };
+
+  const selectAllCities = () => {
+    if (selectedCities.length === processedCities.length) {
+      setSelectedCities([]);
+    } else {
+      setSelectedCities(processedCities.map(c => c.id));
+    }
+  };
+
+  const getStatusBadge = (status) => {
+    const statusConfig = {
+      not_started: { color: "bg-red-100 text-red-800", label: "Not Started" },
+      photo_uploaded: { color: "bg-yellow-100 text-yellow-800", label: "Photo Uploaded" },
+      styled: { color: "bg-orange-100 text-orange-800", label: "Styled" },
+      layered: { color: "bg-blue-100 text-blue-800", label: "Layered" },
+      ready: { color: "bg-green-100 text-green-800", label: "Ready" },
+      archived: { color: "bg-gray-100 text-gray-600", label: "Archived" },
+    };
+    const config = statusConfig[status] || statusConfig.ready;
+    return <span className={`px-2 py-1 rounded-full text-xs font-medium ${config.color}`}>{config.label}</span>;
+  };
+
+  // Refetch when filters change
+  useEffect(() => {
+    if (isAdmin && activeTab === "citybank") {
+      fetchProcessedCities();
+    }
+  }, [cityBankSearch, cityBankStatusFilter, activeTab, isAdmin, fetchProcessedCities]);
 
   // Login handler
   const handleLogin = async (e) => {
@@ -755,36 +920,238 @@ export default function AdminDashboard() {
         {/* City Bank Tab */}
         {activeTab === "citybank" && (
           <div className="fade-in space-y-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-semibold">City Bank</h2>
-                <p className="text-sm text-gray-500">All completed cities with 3 layers</p>
+            {/* Overview Dashboard */}
+            {cityBankStats && (
+              <div className="bg-gradient-to-r from-gray-50 to-gray-100 rounded-xl p-6 border border-gray-200" data-testid="citybank-overview">
+                <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
+                  <BarChart3 className="w-5 h-5" /> City Bank Overview
+                </h2>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="bg-white rounded-lg p-4 border border-gray-200">
+                    <p className="text-3xl font-bold">{cityBankStats.total_cities}</p>
+                    <p className="text-sm text-gray-500">Total Cities</p>
+                  </div>
+                  <div className="bg-white rounded-lg p-4 border border-green-200">
+                    <p className="text-3xl font-bold text-green-600">{cityBankStats.ready_for_sale}</p>
+                    <p className="text-sm text-gray-500">Ready for Sale</p>
+                  </div>
+                  <div className="bg-white rounded-lg p-4 border border-yellow-200">
+                    <p className="text-3xl font-bold text-yellow-600">{cityBankStats.in_progress}</p>
+                    <p className="text-sm text-gray-500">In Progress</p>
+                  </div>
+                  <div className="bg-white rounded-lg p-4 border border-gray-200">
+                    <p className="text-3xl font-bold text-gray-500">{cityBankStats.archived}</p>
+                    <p className="text-sm text-gray-500">Archived</p>
+                  </div>
+                </div>
+                {cityBankStats.most_popular?.length > 0 && (
+                  <div className="mt-4 flex items-center gap-2 text-sm">
+                    <span className="text-gray-500">Most Popular:</span>
+                    {cityBankStats.most_popular.map((city, i) => (
+                      <Badge key={i} variant="secondary">{city}</Badge>
+                    ))}
+                  </div>
+                )}
               </div>
-              <Button variant="outline" size="sm" onClick={fetchProcessedCities}><RefreshCw className="w-4 h-4 mr-1" /> Refresh</Button>
+            )}
+
+            {/* Filters & Search Bar */}
+            <div className="flex flex-wrap items-center gap-4 bg-white p-4 rounded-lg border border-gray-200">
+              <div className="relative flex-1 min-w-[200px]">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <Input
+                  type="text"
+                  placeholder="Search cities..."
+                  value={cityBankSearch}
+                  onChange={(e) => setCityBankSearch(e.target.value)}
+                  className="pl-10"
+                  data-testid="citybank-search"
+                />
+              </div>
+              
+              <Select value={cityBankStatusFilter} onValueChange={setCityBankStatusFilter}>
+                <SelectTrigger className="w-[160px]" data-testid="citybank-status-filter">
+                  <Filter className="w-4 h-4 mr-2" />
+                  <SelectValue placeholder="Filter by status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Status</SelectItem>
+                  <SelectItem value="ready">Ready for Sale</SelectItem>
+                  <SelectItem value="styled">Styled</SelectItem>
+                  <SelectItem value="layered">Layered</SelectItem>
+                  <SelectItem value="archived">Archived</SelectItem>
+                </SelectContent>
+              </Select>
+
+              <div className="flex items-center gap-2 border-l border-gray-200 pl-4">
+                <Button
+                  variant={cityBankViewMode === "grid" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setCityBankViewMode("grid")}
+                >
+                  <Grid className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant={cityBankViewMode === "table" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setCityBankViewMode("table")}
+                >
+                  <List className="w-4 h-4" />
+                </Button>
+              </div>
+
+              <Button variant="outline" size="sm" onClick={() => { fetchProcessedCities(); fetchCityBankStats(); }}>
+                <RefreshCw className="w-4 h-4 mr-1" /> Refresh
+              </Button>
             </div>
+
+            {/* Bulk Actions Bar */}
+            {selectedCities.length > 0 && (
+              <div className="flex items-center gap-4 bg-blue-50 p-3 rounded-lg border border-blue-200">
+                <span className="text-sm font-medium">{selectedCities.length} selected</span>
+                <Button size="sm" variant="outline" onClick={handleBulkArchive}>
+                  <Archive className="w-4 h-4 mr-1" /> Archive Selected
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setSelectedCities([])}>
+                  <X className="w-4 h-4 mr-1" /> Clear Selection
+                </Button>
+              </div>
+            )}
 
             {processedCities.length === 0 ? (
               <div className="text-center py-12 text-gray-500">
                 <ImageIcon className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                <p>No cities processed yet.</p>
+                <p>No cities found.</p>
+                {cityBankSearch || cityBankStatusFilter !== "all" ? (
+                  <Button variant="link" onClick={() => { setCityBankSearch(""); setCityBankStatusFilter("all"); }}>
+                    Clear filters
+                  </Button>
+                ) : null}
               </div>
-            ) : (
-              <div className="grid sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+            ) : cityBankViewMode === "grid" ? (
+              /* Grid View */
+              <div className="grid sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6" data-testid="citybank-grid">
                 {processedCities.map((city) => (
-                  <a key={city.id} href={`/city/${city.id}`} target="_blank" rel="noopener noreferrer" className="block border border-gray-200 rounded-lg overflow-hidden hover:shadow-lg transition-shadow" data-testid={`citybank-card-${city.id}`}>
+                  <div key={city.id} className={`border rounded-lg overflow-hidden hover:shadow-lg transition-shadow ${selectedCities.includes(city.id) ? 'ring-2 ring-blue-500' : 'border-gray-200'}`} data-testid={`citybank-card-${city.id}`}>
                     <div className="aspect-video bg-gray-100 relative flex items-center justify-center">
                       <Layers className="w-12 h-12 text-gray-300" />
-                      <div className="absolute top-2 right-2 bg-green-500 text-white text-xs px-2 py-1 rounded">{city.layer_count} layers</div>
+                      <div className="absolute top-2 left-2">
+                        <Checkbox
+                          checked={selectedCities.includes(city.id)}
+                          onCheckedChange={() => toggleCitySelection(city.id)}
+                          className="bg-white"
+                        />
+                      </div>
+                      <div className="absolute top-2 right-2">
+                        {getStatusBadge(city.status)}
+                      </div>
                     </div>
                     <div className="p-4">
-                      <h3 className="font-semibold text-lg">{city.city_name}</h3>
-                      <p className="text-sm text-gray-500">{city.style_name}</p>
-                      {city.expansion_percentage > 0 && (
-                        <p className="text-xs text-blue-600 mt-1">+{city.expansion_percentage}% spacing</p>
-                      )}
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <h3 className="font-semibold text-lg">{city.city_name}</h3>
+                          <p className="text-sm text-gray-500">{city.country || city.style_name}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 mt-2 text-xs text-gray-500">
+                        <span>{city.layer_count} layers</span>
+                        {city.expansion_percentage > 0 && (
+                          <span className="text-blue-600">+{city.expansion_percentage}%</span>
+                        )}
+                        {city.poems_count > 0 && (
+                          <span title="Has poems">📝 {city.poems_count}</span>
+                        )}
+                        {city.art_3d_count > 0 && (
+                          <span title="Has 3D models">🎨 {city.art_3d_count}</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1 mt-3">
+                        <Button size="sm" variant="outline" asChild className="flex-1">
+                          <a href={`/city/${city.id}`} target="_blank" rel="noopener noreferrer">
+                            <Eye className="w-3 h-3 mr-1" /> View
+                          </a>
+                        </Button>
+                        {city.status === "archived" ? (
+                          <Button size="sm" variant="ghost" onClick={() => handleRestoreCity(city.id)}>
+                            <RotateCcw className="w-3 h-3" />
+                          </Button>
+                        ) : (
+                          <Button size="sm" variant="ghost" onClick={() => handleArchiveCity(city.id)}>
+                            <Archive className="w-3 h-3" />
+                          </Button>
+                        )}
+                        <Button size="sm" variant="ghost" className="text-red-600 hover:text-red-700 hover:bg-red-50" onClick={() => handleDeleteCity(city.id)}>
+                          <Trash2 className="w-3 h-3" />
+                        </Button>
+                      </div>
                     </div>
-                  </a>
+                  </div>
                 ))}
+              </div>
+            ) : (
+              /* Table View */
+              <div className="bg-white rounded-lg border border-gray-200 overflow-hidden" data-testid="citybank-table">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-gray-200 bg-gray-50">
+                      <th className="p-3 text-left">
+                        <Checkbox
+                          checked={selectedCities.length === processedCities.length && processedCities.length > 0}
+                          onCheckedChange={selectAllCities}
+                        />
+                      </th>
+                      <th className="p-3 text-left font-semibold text-sm">City</th>
+                      <th className="p-3 text-left font-semibold text-sm">Style</th>
+                      <th className="p-3 text-left font-semibold text-sm">Status</th>
+                      <th className="p-3 text-left font-semibold text-sm">Layers</th>
+                      <th className="p-3 text-left font-semibold text-sm">Views</th>
+                      <th className="p-3 text-left font-semibold text-sm">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {processedCities.map((city) => (
+                      <tr key={city.id} className={`border-b border-gray-100 hover:bg-gray-50 ${selectedCities.includes(city.id) ? 'bg-blue-50' : ''}`}>
+                        <td className="p-3">
+                          <Checkbox
+                            checked={selectedCities.includes(city.id)}
+                            onCheckedChange={() => toggleCitySelection(city.id)}
+                          />
+                        </td>
+                        <td className="p-3">
+                          <div>
+                            <p className="font-medium">{city.city_name}</p>
+                            <p className="text-xs text-gray-500">{city.country || "-"}</p>
+                          </div>
+                        </td>
+                        <td className="p-3 text-sm">{city.style_name}</td>
+                        <td className="p-3">{getStatusBadge(city.status)}</td>
+                        <td className="p-3 text-sm">{city.layer_count}</td>
+                        <td className="p-3 text-sm">{city.views || 0}</td>
+                        <td className="p-3">
+                          <div className="flex items-center gap-1">
+                            <Button size="sm" variant="ghost" asChild>
+                              <a href={`/city/${city.id}`} target="_blank" rel="noopener noreferrer">
+                                <Eye className="w-4 h-4" />
+                              </a>
+                            </Button>
+                            {city.status === "archived" ? (
+                              <Button size="sm" variant="ghost" onClick={() => handleRestoreCity(city.id)}>
+                                <RotateCcw className="w-4 h-4" />
+                              </Button>
+                            ) : (
+                              <Button size="sm" variant="ghost" onClick={() => handleArchiveCity(city.id)}>
+                                <Archive className="w-4 h-4" />
+                              </Button>
+                            )}
+                            <Button size="sm" variant="ghost" className="text-red-600" onClick={() => handleDeleteCity(city.id)}>
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>

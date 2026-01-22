@@ -90,6 +90,31 @@ class QueueItem(BaseModel):
     created_at: str
     updated_at: str
 
+class Poem(BaseModel):
+    title: str
+    content: str
+    author: str = "AI Generated"
+    style: str = "Free Verse"
+
+class Art3D(BaseModel):
+    model_url: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    type: str = "Landmark"
+    description: str = ""
+
+class RelatedArt(BaseModel):
+    image_url: Optional[str] = None
+    title: str = ""
+    style: str = "Digital"
+    description: str = ""
+
+class ColorPalette(BaseModel):
+    primary: str = "#2D5F3F"
+    secondary: str = "#7A8B99"
+    accent: str = "#F4A261"
+    background: str = "#1A2B2D"
+    text: str = "#E9ECEF"
+
 class ProcessedCity(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str
@@ -100,6 +125,35 @@ class ProcessedCity(BaseModel):
     original_aspect_ratio: str
     final_aspect_ratio: str
     created_at: str
+    # New fields for enhanced City Bank
+    country: Optional[str] = None
+    region: Optional[str] = None
+    tagline: Optional[str] = None
+    status: str = "ready"  # not_started, photo_uploaded, styled, layered, ready, archived
+    poems: List[Poem] = []
+    art_3d: List[Art3D] = []
+    related_art: List[RelatedArt] = []
+    color_palette: Optional[ColorPalette] = None
+    views: int = 0
+    purchases: int = 0
+
+class CityUpdateInput(BaseModel):
+    country: Optional[str] = None
+    region: Optional[str] = None
+    tagline: Optional[str] = None
+    status: Optional[str] = None
+    poems: Optional[List[Poem]] = None
+    art_3d: Optional[List[Art3D]] = None
+    related_art: Optional[List[RelatedArt]] = None
+    color_palette: Optional[ColorPalette] = None
+
+class CityBankStats(BaseModel):
+    total_cities: int
+    ready_for_sale: int
+    in_progress: int
+    awaiting_upload: int
+    archived: int
+    most_popular: List[str]
 
 # Helper functions
 async def get_api_keys():
@@ -930,6 +984,174 @@ async def get_featured():
         "layer_count": c["layer_count"],
         "expansion_percentage": c.get("expansion_percentage", 0)
     } for c in cities]
+
+# City Bank Stats
+@api_router.get("/citybank/stats", response_model=CityBankStats)
+async def get_citybank_stats():
+    """Get City Bank overview statistics"""
+    all_cities = await db.processed.find({}, {"_id": 0}).to_list(1000)
+    
+    total = len(all_cities)
+    ready = sum(1 for c in all_cities if c.get("status", "ready") == "ready")
+    in_progress = sum(1 for c in all_cities if c.get("status") in ["styled", "layered", "photo_uploaded"])
+    awaiting = sum(1 for c in all_cities if c.get("status") == "not_started")
+    archived = sum(1 for c in all_cities if c.get("status") == "archived")
+    
+    # Get most viewed cities
+    sorted_by_views = sorted(all_cities, key=lambda x: x.get("views", 0), reverse=True)
+    most_popular = [c["city_name"] for c in sorted_by_views[:3]] if sorted_by_views else []
+    
+    return CityBankStats(
+        total_cities=total,
+        ready_for_sale=ready,
+        in_progress=in_progress,
+        awaiting_upload=awaiting,
+        archived=archived,
+        most_popular=most_popular
+    )
+
+# City Bank - Full list with filters
+@api_router.get("/citybank/cities")
+async def list_citybank_cities(
+    status: Optional[str] = None,
+    region: Optional[str] = None,
+    style: Optional[str] = None,
+    search: Optional[str] = None
+):
+    """List all cities with optional filters for City Bank admin"""
+    query = {}
+    
+    if status:
+        query["status"] = status
+    if region:
+        query["region"] = {"$regex": region, "$options": "i"}
+    if style:
+        query["style_name"] = {"$regex": style, "$options": "i"}
+    if search:
+        query["city_name"] = {"$regex": search, "$options": "i"}
+    
+    cities = await db.processed.find(query, {"_id": 0}).sort("processed_at", -1).to_list(500)
+    
+    return [{
+        "id": c["id"],
+        "city_name": c["city_name"],
+        "country": c.get("country", ""),
+        "region": c.get("region", ""),
+        "tagline": c.get("tagline", ""),
+        "style_name": c["style_name"],
+        "layer_count": c["layer_count"],
+        "status": c.get("status", "ready"),
+        "expansion_percentage": c.get("expansion_percentage", 0),
+        "views": c.get("views", 0),
+        "purchases": c.get("purchases", 0),
+        "poems_count": len(c.get("poems", [])),
+        "art_3d_count": len(c.get("art_3d", [])),
+        "related_art_count": len(c.get("related_art", [])),
+        "has_color_palette": c.get("color_palette") is not None,
+        "created_at": c.get("processed_at", c.get("created_at"))
+    } for c in cities]
+
+# City Bank - Update city details
+@api_router.patch("/citybank/cities/{city_id}")
+async def update_city_details(city_id: str, update: CityUpdateInput):
+    """Update city details for City Bank"""
+    city = await db.processed.find_one({"id": city_id}, {"_id": 0})
+    if not city:
+        raise HTTPException(status_code=404, detail="City not found")
+    
+    update_data = {}
+    if update.country is not None:
+        update_data["country"] = update.country
+    if update.region is not None:
+        update_data["region"] = update.region
+    if update.tagline is not None:
+        update_data["tagline"] = update.tagline
+    if update.status is not None:
+        update_data["status"] = update.status
+    if update.poems is not None:
+        update_data["poems"] = [p.model_dump() for p in update.poems]
+    if update.art_3d is not None:
+        update_data["art_3d"] = [a.model_dump() for a in update.art_3d]
+    if update.related_art is not None:
+        update_data["related_art"] = [a.model_dump() for a in update.related_art]
+    if update.color_palette is not None:
+        update_data["color_palette"] = update.color_palette.model_dump()
+    
+    if update_data:
+        update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+        await db.processed.update_one({"id": city_id}, {"$set": update_data})
+    
+    return {"success": True, "message": "City updated"}
+
+# City Bank - Archive city
+@api_router.post("/citybank/cities/{city_id}/archive")
+async def archive_city(city_id: str):
+    """Archive a city (remove from active catalog)"""
+    city = await db.processed.find_one({"id": city_id}, {"_id": 0})
+    if not city:
+        raise HTTPException(status_code=404, detail="City not found")
+    
+    await db.processed.update_one(
+        {"id": city_id},
+        {"$set": {"status": "archived", "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return {"success": True, "message": f"{city['city_name']} archived"}
+
+# City Bank - Restore city
+@api_router.post("/citybank/cities/{city_id}/restore")
+async def restore_city(city_id: str):
+    """Restore an archived city"""
+    city = await db.processed.find_one({"id": city_id}, {"_id": 0})
+    if not city:
+        raise HTTPException(status_code=404, detail="City not found")
+    
+    await db.processed.update_one(
+        {"id": city_id},
+        {"$set": {"status": "ready", "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return {"success": True, "message": f"{city['city_name']} restored"}
+
+# City Bank - Delete city permanently
+@api_router.delete("/citybank/cities/{city_id}")
+async def delete_city_permanently(city_id: str):
+    """Permanently delete a city"""
+    city = await db.processed.find_one({"id": city_id}, {"_id": 0})
+    if not city:
+        raise HTTPException(status_code=404, detail="City not found")
+    
+    # Delete associated files
+    for key in ["layer_1_path", "layer_2_path", "layer_3_path", "stage1_svg_path", "spaced_svg_path", "original_filepath"]:
+        if city.get(key):
+            try:
+                Path(city[key]).unlink(missing_ok=True)
+            except Exception as e:
+                logger.warning(f"Could not delete file {city[key]}: {e}")
+    
+    await db.processed.delete_one({"id": city_id})
+    return {"success": True, "message": f"{city['city_name']} deleted permanently"}
+
+# City Bank - Bulk archive
+@api_router.post("/citybank/bulk/archive")
+async def bulk_archive_cities(city_ids: List[str]):
+    """Archive multiple cities"""
+    result = await db.processed.update_many(
+        {"id": {"$in": city_ids}},
+        {"$set": {"status": "archived", "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return {"success": True, "archived_count": result.modified_count}
+
+# City Bank - Get city with full immersive data
+@api_router.get("/citybank/cities/{city_id}/full")
+async def get_city_full_data(city_id: str):
+    """Get complete city data for immersive page"""
+    city = await db.processed.find_one({"id": city_id}, {"_id": 0})
+    if not city:
+        raise HTTPException(status_code=404, detail="City not found")
+    
+    # Increment view count
+    await db.processed.update_one({"id": city_id}, {"$inc": {"views": 1}})
+    
+    return city
 
 # Include the router
 app.include_router(api_router)
