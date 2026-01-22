@@ -989,24 +989,35 @@ async def get_featured():
 @api_router.get("/citybank/stats", response_model=CityBankStats)
 async def get_citybank_stats():
     """Get City Bank overview statistics"""
-    all_cities = await db.processed.find({}, {"_id": 0}).to_list(1000)
+    # Use aggregation pipeline for efficient stats calculation
+    pipeline = [
+        {"$group": {
+            "_id": None,
+            "total": {"$sum": 1},
+            "ready": {"$sum": {"$cond": [{"$in": [{"$ifNull": ["$status", "ready"]}, ["ready", None]]}, 1, 0]}},
+            "in_progress": {"$sum": {"$cond": [{"$in": ["$status", ["styled", "layered", "photo_uploaded"]]}, 1, 0]}},
+            "awaiting": {"$sum": {"$cond": [{"$eq": ["$status", "not_started"]}, 1, 0]}},
+            "archived": {"$sum": {"$cond": [{"$eq": ["$status", "archived"]}, 1, 0]}}
+        }}
+    ]
     
-    total = len(all_cities)
-    ready = sum(1 for c in all_cities if c.get("status", "ready") == "ready")
-    in_progress = sum(1 for c in all_cities if c.get("status") in ["styled", "layered", "photo_uploaded"])
-    awaiting = sum(1 for c in all_cities if c.get("status") == "not_started")
-    archived = sum(1 for c in all_cities if c.get("status") == "archived")
+    stats_result = await db.processed.aggregate(pipeline).to_list(1)
+    stats = stats_result[0] if stats_result else {"total": 0, "ready": 0, "in_progress": 0, "awaiting": 0, "archived": 0}
     
-    # Get most viewed cities
-    sorted_by_views = sorted(all_cities, key=lambda x: x.get("views", 0), reverse=True)
-    most_popular = [c["city_name"] for c in sorted_by_views[:3]] if sorted_by_views else []
+    # Get most viewed cities using aggregation with sort and limit
+    top_cities = await db.processed.aggregate([
+        {"$sort": {"views": -1}},
+        {"$limit": 3},
+        {"$project": {"city_name": 1, "_id": 0}}
+    ]).to_list(3)
+    most_popular = [c["city_name"] for c in top_cities if c.get("city_name")]
     
     return CityBankStats(
-        total_cities=total,
-        ready_for_sale=ready,
-        in_progress=in_progress,
-        awaiting_upload=awaiting,
-        archived=archived,
+        total_cities=stats.get("total", 0),
+        ready_for_sale=stats.get("ready", 0),
+        in_progress=stats.get("in_progress", 0),
+        awaiting_upload=stats.get("awaiting", 0),
+        archived=stats.get("archived", 0),
         most_popular=most_popular
     )
 
@@ -1016,7 +1027,9 @@ async def list_citybank_cities(
     status: Optional[str] = None,
     region: Optional[str] = None,
     style: Optional[str] = None,
-    search: Optional[str] = None
+    search: Optional[str] = None,
+    limit: int = 100,
+    skip: int = 0
 ):
     """List all cities with optional filters for City Bank admin"""
     query = {}
@@ -1030,7 +1043,10 @@ async def list_citybank_cities(
     if search:
         query["city_name"] = {"$regex": search, "$options": "i"}
     
-    cities = await db.processed.find(query, {"_id": 0}).sort("processed_at", -1).to_list(500)
+    # Apply reasonable limit (max 500)
+    limit = min(limit, 500)
+    
+    cities = await db.processed.find(query, {"_id": 0}).sort("processed_at", -1).skip(skip).limit(limit).to_list(limit)
     
     return [{
         "id": c["id"],

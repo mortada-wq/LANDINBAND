@@ -3,17 +3,7 @@ import { useParams, useNavigate, Link } from "react-router-dom";
 import { API } from "@/App";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Download, Layers, FileText, Loader2, Quote, Image as ImageIcon, Box } from "lucide-react";
-
-// Default city color palettes for different cities
-const defaultPalettes = {
-  seattle: { primary: "#2D5F3F", secondary: "#7A8B99", accent: "#F4A261", background: "#1A2B2D", text: "#E9ECEF" },
-  "new york": { primary: "#F4D03F", secondary: "#5D6D7E", accent: "#E74C3C", background: "#1C2833", text: "#FFFFFF" },
-  tokyo: { primary: "#FF1493", secondary: "#00CED1", accent: "#FFD700", background: "#0A0E27", text: "#FFFFFF" },
-  paris: { primary: "#C19A6B", secondary: "#8B7D6B", accent: "#E63946", background: "#2C2416", text: "#F5E6D3" },
-  chicago: { primary: "#1E3A5F", secondary: "#C0C0C0", accent: "#FF6B35", background: "#0D1B2A", text: "#E0E1DD" },
-  london: { primary: "#8B0000", secondary: "#2F4F4F", accent: "#FFD700", background: "#1A1A2E", text: "#EAEAEA" },
-  default: { primary: "#4A6B8A", secondary: "#6B9AC4", accent: "#F4A261", background: "#1A2B3D", text: "#E9ECEF" },
-};
+import { getCityPalette } from "@/lib/cityPalettes";
 
 export default function CityPage() {
   const { cityId } = useParams();
@@ -56,11 +46,7 @@ export default function CityPage() {
   // Get color palette for city
   const getColorPalette = () => {
     if (city?.color_palette) return city.color_palette;
-    const cityNameLower = city?.city_name?.toLowerCase() || "";
-    for (const [key, palette] of Object.entries(defaultPalettes)) {
-      if (cityNameLower.includes(key)) return palette;
-    }
-    return defaultPalettes.default;
+    return getCityPalette(city?.city_name);
   };
 
   // Layer colors
