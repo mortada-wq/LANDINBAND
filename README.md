@@ -9,7 +9,7 @@ pip install -r requirements.txt
 export MONGO_URL="mongodb://localhost:27017"
 export DB_NAME="layered_relief"
 export ADMIN_EMAIL="admin@example.com"
-export ADMIN_PASSWORD="changeme123" # change this for real use
+export ADMIN_PASSWORD="YOUR_SECURE_PASSWORD_HERE"
 export CORS_ORIGINS="http://localhost:3000"
 uvicorn server:app --reload --port 8000
 ```
@@ -33,7 +33,7 @@ npm start
 Open http://localhost:3000 to preview the UI.
 
 ## Tests
-Frontend tests currently report "No tests found":
+Frontend tests currently report "No tests found" (expected until tests are added):
 ```bash
 cd frontend
 yarn test --watchAll=false
