@@ -6,11 +6,16 @@
 ```bash
 cd backend
 pip install -r requirements.txt
-# Optional: create backend/.env instead of exporting in shell history.
+# Optional: create backend/.env instead of exporting in shell history, for example:
+# MONGO_URL=mongodb://localhost:27017
+# DB_NAME=layered_relief
+# ADMIN_EMAIL=admin@example.com
+# ADMIN_PASSWORD=CHANGE_ME_SECURE_PASSWORD
+# CORS_ORIGINS=http://localhost:3000
 export MONGO_URL="mongodb://localhost:27017"
 export DB_NAME="layered_relief"
 export ADMIN_EMAIL="admin@example.com"
-export ADMIN_PASSWORD="YOUR_SECURE_PASSWORD_HERE"
+export ADMIN_PASSWORD="CHANGE_ME_SECURE_PASSWORD"
 # Use a real password locally and avoid committing secrets to git.
 export CORS_ORIGINS="http://localhost:3000"
 uvicorn server:app --reload --port 8000
@@ -49,5 +54,10 @@ npm test -- --watchAll=false
 
 Backend tests are run via the existing script (expects the API to be reachable):
 ```bash
+cd backend
+uvicorn server:app --reload --port 8000
+
+# In another terminal:
+cd /path/to/LANDINBAND
 python backend_test.py
 ```
