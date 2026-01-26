@@ -10,12 +10,12 @@ pip install -r requirements.txt
 # MONGO_URL=mongodb://localhost:27017
 # DB_NAME=layered_relief
 # ADMIN_EMAIL=admin@example.com
-# ADMIN_PASSWORD=CHANGE_ME_SECURE_PASSWORD
+# ADMIN_PASSWORD=your-secure-password-here
 # CORS_ORIGINS=http://localhost:3000
 export MONGO_URL="mongodb://localhost:27017"
 export DB_NAME="layered_relief"
 export ADMIN_EMAIL="admin@example.com"
-export ADMIN_PASSWORD="CHANGE_ME_SECURE_PASSWORD"
+export ADMIN_PASSWORD="your-secure-password-here" # replace with a real password
 # Use a real password locally and avoid committing secrets to git.
 export CORS_ORIGINS="http://localhost:3000"
 uvicorn server:app --reload --port 8000
@@ -58,6 +58,6 @@ cd backend
 uvicorn server:app --reload --port 8000
 
 # In another terminal:
-cd /path/to/LANDINBAND
+cd /path/to/project-root
 python backend_test.py
 ```
