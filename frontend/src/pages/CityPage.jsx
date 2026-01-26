@@ -229,7 +229,7 @@ export default function CityPage() {
                 <img
                   src={`${API}/cities/${cityId}/layer/3`}
                   alt="Layer 3 - Background"
-                  className="absolute inset-0 w-full h-full object-contain opacity-70 pointer-events-none"
+                  className="absolute inset-0 w-full h-full object-contain opacity-70"
                   style={{
                     transform: `translate(${layerOffsets.layer3.x}px, ${layerOffsets.layer3.y}px)`,
                     filter: 'hue-rotate(200deg)',
@@ -246,7 +246,7 @@ export default function CityPage() {
                 <img
                   src={`${API}/cities/${cityId}/layer/2`}
                   alt="Layer 2 - Middle"
-                  className="absolute inset-0 w-full h-full object-contain opacity-70 pointer-events-none"
+                  className="absolute inset-0 w-full h-full object-contain opacity-70"
                   style={{
                     transform: `translate(${layerOffsets.layer2.x}px, ${layerOffsets.layer2.y}px)`,
                     filter: 'hue-rotate(60deg)',
@@ -263,7 +263,7 @@ export default function CityPage() {
                 <img
                   src={`${API}/cities/${cityId}/layer/1`}
                   alt="Layer 1 - Foreground"
-                  className="absolute inset-0 w-full h-full object-contain opacity-70 pointer-events-none"
+                  className="absolute inset-0 w-full h-full object-contain opacity-70"
                   style={{
                     transform: `translate(${layerOffsets.layer1.x}px, ${layerOffsets.layer1.y}px)`,
                     filter: 'hue-rotate(0deg)',
