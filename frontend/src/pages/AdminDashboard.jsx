@@ -61,9 +61,9 @@ export default function AdminDashboard() {
   const [processing, setProcessing] = useState(false);
   const [selectedQueueItem, setSelectedQueueItem] = useState(null);
   
-  // Spacing state
+  // Spacing modal state
+  const [showSpacingModal, setShowSpacingModal] = useState(null); // stores city_id when open
   const [spacingValue, setSpacingValue] = useState(0);
-  const [spacingPreview, setSpacingPreview] = useState(null);
   const [applyingSpacing, setApplyingSpacing] = useState(false);
   
   // City Bank state
@@ -265,71 +265,50 @@ export default function AdminDashboard() {
     }
   };
 
-  // Process Stage 1
-  const handleProcessStage1 = async (cityId) => {
+  const handleProcessCity = async (cityId) => {
     setProcessing(true);
     try {
-      const res = await fetch(`${API}/process/stage1/${cityId}`, { method: "POST" });
+      const res = await fetch(`${API}/process/${cityId}`, { method: "POST" });
       const data = await res.json();
       
       if (res.ok) {
-        toast.success(data.message);
+        toast.success(data.message || "All 3 layers created!");
         fetchQueue();
-        // Auto-select this item for spacing adjustment
-        setSelectedQueueItem(cityId);
-        setSpacingValue(0);
+        fetchProcessedCities();
       } else {
-        toast.error(data.detail || "Stage 1 failed");
+        toast.error(data.detail || "Processing failed");
       }
     } catch (e) {
-      toast.error("Stage 1 failed");
+      toast.error("Processing failed");
+      console.error(e);
     }
     setProcessing(false);
   };
 
-  // Apply spacing
-  const handleApplySpacing = async (cityId) => {
+  const applySpacing = async (cityId, percentage) => {
     setApplyingSpacing(true);
     try {
-      const res = await fetch(`${API}/process/spacing/${cityId}`, {
+      const res = await fetch(`${API}/cities/${cityId}/spacing`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ expansion_percentage: spacingValue }),
+        body: JSON.stringify({ expansion_percentage: percentage })
       });
+      
       const data = await res.json();
       
       if (res.ok) {
-        toast.success(`Spacing applied: ${spacingValue}% expansion`);
-        setSpacingPreview(data);
-        fetchQueue();
+        toast.success("Spacing applied instantly!");
+        setShowSpacingModal(null);
+        setSpacingValue(0);
+        fetchProcessedCities();
       } else {
-        toast.error(data.detail || "Spacing failed");
+        toast.error(data.detail || "Failed to apply spacing");
       }
     } catch (e) {
       toast.error("Spacing failed");
+      console.error(e);
     }
     setApplyingSpacing(false);
-  };
-
-  // Process Stage 2
-  const handleProcessStage2 = async (cityId) => {
-    setProcessing(true);
-    try {
-      const res = await fetch(`${API}/process/stage2/${cityId}`, { method: "POST" });
-      const data = await res.json();
-      
-      if (res.ok) {
-        toast.success(data.message);
-        fetchQueue();
-        fetchProcessedCities();
-        setSelectedQueueItem(null);
-      } else {
-        toast.error(data.detail || "Stage 2 failed");
-      }
-    } catch (e) {
-      toast.error("Stage 2 failed");
-    }
-    setProcessing(false);
   };
 
   // Cancel queue item
@@ -350,10 +329,7 @@ export default function AdminDashboard() {
   const getStatusColor = (status) => {
     switch (status) {
       case "waiting": return "bg-yellow-100 text-yellow-800";
-      case "stage1_processing": return "bg-blue-100 text-blue-800";
-      case "stage1_complete": return "bg-purple-100 text-purple-800";
-      case "spacing_applied": return "bg-indigo-100 text-indigo-800";
-      case "stage2_processing": return "bg-cyan-100 text-cyan-800";
+      case "processing": return "bg-blue-100 text-blue-800";
       case "done": return "bg-green-100 text-green-800";
       case "error": return "bg-red-100 text-red-800";
       default: return "bg-gray-100 text-gray-800";
@@ -363,11 +339,8 @@ export default function AdminDashboard() {
   // Get status label
   const getStatusLabel = (status) => {
     switch (status) {
-      case "waiting": return "Waiting";
-      case "stage1_processing": return "Stage 1: Stylizing...";
-      case "stage1_complete": return "Stage 1 Done → Adjust Spacing";
-      case "spacing_applied": return "Spacing Set → Ready for Stage 2";
-      case "stage2_processing": return "Stage 2: Creating Layers...";
+      case "waiting": return "Ready to Process";
+      case "processing": return "Generating Layers...";
       case "done": return "Complete!";
       case "error": return "Error";
       default: return status;
@@ -623,22 +596,32 @@ export default function AdminDashboard() {
           </div>
         )}
 
-        {/* Queue Monitor Tab - 2-Stage Workflow */}
+        {/* Queue Monitor Tab */}
         {activeTab === "queue" && (
           <div className="fade-in space-y-6">
             {/* Workflow Diagram */}
-            <div className="bg-gray-50 rounded-lg p-4">
-              <h3 className="font-semibold mb-3">2-Stage Gemini Workflow</h3>
-              <div className="flex items-center gap-2 text-sm flex-wrap">
-                <span className="px-3 py-1 bg-yellow-100 rounded">1. Upload</span>
-                <ChevronRight className="w-4 h-4 text-gray-400" />
-                <span className="px-3 py-1 bg-blue-100 rounded">2. Stage 1: Style Transfer</span>
-                <ChevronRight className="w-4 h-4 text-gray-400" />
-                <span className="px-3 py-1 bg-purple-100 rounded">3. Adjust Spacing</span>
-                <ChevronRight className="w-4 h-4 text-gray-400" />
-                <span className="px-3 py-1 bg-cyan-100 rounded">4. Stage 2: Layer Separation</span>
-                <ChevronRight className="w-4 h-4 text-gray-400" />
-                <span className="px-3 py-1 bg-green-100 rounded">5. Done (3 SVG Layers)</span>
+            <div className="mb-6 bg-blue-50 p-4 rounded-lg">
+              <h3 className="text-sm font-semibold mb-2 text-blue-900">New Workflow:</h3>
+              <div className="flex items-center gap-2 text-sm text-blue-800">
+                <span className="flex items-center gap-1">
+                  <Upload className="w-4 h-4" />
+                  Upload
+                </span>
+                <ChevronRight className="w-4 h-4" />
+                <span className="flex items-center gap-1">
+                  <Layers className="w-4 h-4" />
+                  Generate 3 Layers (AI)
+                </span>
+                <ChevronRight className="w-4 h-4" />
+                <span className="flex items-center gap-1">
+                  <MoveHorizontal className="w-4 h-4" />
+                  Adjust Spacing (Optional)
+                </span>
+                <ChevronRight className="w-4 h-4" />
+                <span className="flex items-center gap-1">
+                  <Check className="w-4 h-4" />
+                  Done!
+                </span>
               </div>
             </div>
 
@@ -672,79 +655,60 @@ export default function AdminDashboard() {
                     {/* Action buttons based on status */}
                     <div className="flex flex-wrap gap-2">
                       {item.status === "waiting" && (
-                        <>
-                          <Button size="sm" onClick={() => handleProcessStage1(item.id)} disabled={processing}>
-                            {processing ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <Play className="w-4 h-4 mr-1" />}
-                            Run Stage 1
-                          </Button>
-                          <Button size="sm" variant="ghost" onClick={() => handleCancelItem(item.id)}><X className="w-4 h-4" /></Button>
-                        </>
-                      )}
-
-                      {item.status === "stage1_complete" && (
-                        <Button size="sm" variant="outline" onClick={() => setSelectedQueueItem(item.id)}>
-                          <MoveHorizontal className="w-4 h-4 mr-1" /> Adjust Spacing
+                        <Button 
+                          onClick={() => handleProcessCity(item.id)} 
+                          disabled={processing}
+                          size="sm"
+                        >
+                          {processing ? (
+                            <>
+                              <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                              Processing...
+                            </>
+                          ) : (
+                            <>
+                              <Layers className="w-4 h-4 mr-2" />
+                              Generate 3 Layers
+                            </>
+                          )}
                         </Button>
                       )}
 
-                      {(item.status === "spacing_applied" || item.status === "stage1_complete") && selectedQueueItem === item.id && (
-                        <Button size="sm" onClick={() => handleProcessStage2(item.id)} disabled={processing}>
-                          {processing ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <Layers className="w-4 h-4 mr-1" />}
-                          Run Stage 2
-                        </Button>
+                      {item.status === "processing" && (
+                        <div className="flex items-center gap-2">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span className="text-sm">Processing... {item.progress}%</span>
+                        </div>
                       )}
 
                       {item.status === "done" && (
-                        <a href={`/city/${item.id}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sm text-green-600 hover:text-green-800 font-medium">
-                          <Eye className="w-4 h-4" /> View Result
-                        </a>
+                        <div className="flex gap-2">
+                          <Button 
+                            onClick={() => {
+                              setShowSpacingModal(item.id);
+                              setSpacingValue(0);
+                            }}
+                            size="sm"
+                            variant="outline"
+                          >
+                            <MoveHorizontal className="w-4 h-4 mr-2" />
+                            Adjust Spacing
+                          </Button>
+                          <a href={`/city/${item.id}`} target="_blank" rel="noopener noreferrer">
+                            <Button size="sm" variant="outline">
+                              <Eye className="w-4 h-4 mr-2" />
+                              View Result
+                            </Button>
+                          </a>
+                        </div>
                       )}
 
                       {item.status === "error" && (
-                        <span className="text-sm text-red-600">{item.error_message?.substring(0, 50)}...</span>
+                        <div className="text-red-600 text-sm">
+                          Error: {item.error_message || "Unknown error"}
+                        </div>
                       )}
                     </div>
-
-                    {/* Spacing Control Panel - shows when item is selected and stage1 is complete */}
-                    {selectedQueueItem === item.id && ["stage1_complete", "spacing_applied"].includes(item.status) && (
-                      <div className="mt-4 p-4 bg-white rounded-lg border border-blue-200">
-                        <h4 className="font-semibold mb-3 flex items-center gap-2">
-                          <MoveHorizontal className="w-5 h-5" /> Horizontal Spacing Adjustment
-                        </h4>
-                        <p className="text-sm text-gray-600 mb-4">Expand horizontal distance between buildings (for watch strap production)</p>
-                        
-                        <div className="space-y-4">
-                          <div>
-                            <div className="flex justify-between mb-2">
-                              <Label>Expansion: {spacingValue}%</Label>
-                              <span className="text-sm text-gray-500">0% = original, 200% = triple width</span>
-                            </div>
-                            <Slider
-                              value={[spacingValue]}
-                              onValueChange={(val) => setSpacingValue(val[0])}
-                              min={0}
-                              max={200}
-                              step={5}
-                              className="w-full"
-                            />
-                          </div>
-
-                          {item.expansion_percentage !== undefined && item.expansion_percentage !== null && (
-                            <p className="text-sm text-green-600">Current applied: {item.expansion_percentage}%</p>
-                          )}
-
-                          <div className="flex gap-2">
-                            <Button onClick={() => handleApplySpacing(item.id)} disabled={applyingSpacing}>
-                              {applyingSpacing ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : null}
-                              Apply Spacing ({spacingValue}%)
-                            </Button>
-                            <Button variant="outline" onClick={() => { setSpacingValue(0); handleApplySpacing(item.id); }}>
-                              Reset to 0%
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
                   </div>
                 ))}
               </div>
@@ -790,6 +754,59 @@ export default function AdminDashboard() {
           </div>
         )}
       </main>
+
+      {/* Spacing Modal */}
+      {showSpacingModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-bold mb-4">Adjust Horizontal Spacing</h3>
+            
+            <div className="mb-4">
+              <Label htmlFor="spacing-slider">
+                Expansion: {spacingValue}%
+              </Label>
+              <Slider
+                id="spacing-slider"
+                value={[spacingValue]}
+                onValueChange={(val) => setSpacingValue(val[0])}
+                min={0}
+                max={200}
+                step={5}
+                className="mt-2"
+              />
+              <p className="text-sm text-gray-600 mt-2">
+                Adjust the horizontal spacing between buildings (0-200%)
+              </p>
+            </div>
+            
+            <div className="flex gap-2 justify-end">
+              <Button 
+                variant="outline" 
+                onClick={() => {
+                  setShowSpacingModal(null);
+                  setSpacingValue(0);
+                }}
+                disabled={applyingSpacing}
+              >
+                Cancel
+              </Button>
+              <Button 
+                onClick={() => applySpacing(showSpacingModal, spacingValue)}
+                disabled={applyingSpacing}
+              >
+                {applyingSpacing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                    Applying...
+                  </>
+                ) : (
+                  "Apply (Instant!)"
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
