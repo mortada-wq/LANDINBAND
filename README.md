@@ -6,6 +6,7 @@
 ```bash
 cd backend
 pip install -r requirements.txt
+ # Optional: create backend/.env instead of exporting in shell history.
 export MONGO_URL="mongodb://localhost:27017"
 export DB_NAME="layered_relief"
 export ADMIN_EMAIL="admin@example.com"
@@ -48,6 +49,6 @@ npm test -- --watchAll=false
 
 Backend tests are run via the existing script (expects the API to be reachable):
 ```bash
-cd backend
-python ../backend_test.py
+cd /home/runner/work/LANDINBAND/LANDINBAND
+python backend_test.py
 ```
