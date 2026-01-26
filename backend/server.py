@@ -21,6 +21,13 @@ import xml.etree.ElementTree as ET
 # Gemini integration
 from google import genai
 
+# SVG processing utilities
+from svg_processor import (
+    parse_svg_buildings,
+    separate_buildings_into_layers,
+    apply_horizontal_spacing
+)
+
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
@@ -83,9 +90,9 @@ class QueueItem(BaseModel):
     city_name: str
     style_id: str
     style_name: str
-    status: str  # waiting, stage1_processing, stage1_complete, spacing_applied, stage2_processing, done, error
+    status: str  # waiting, processing, done, error
     progress: int = 0
-    expansion_percentage: Optional[int] = None
+    building_count: Optional[int] = None
     error_message: Optional[str] = None
     created_at: str
     updated_at: str
@@ -411,10 +418,156 @@ async def cancel_queue_item(item_id: str):
         raise HTTPException(status_code=404, detail="Item not found")
     return {"message": "Cancelled"}
 
+@api_router.post("/process/{city_id}")
+async def process_city(city_id: str):
+    """
+    Single processing endpoint:
+    1. Call Gemini AI ONCE to generate master SVG
+    2. Parse buildings with Python
+    3. Separate into 3 layers with Python
+    4. Save all files
+    
+    Total time: 30-60 seconds
+    """
+    item = await db.queue.find_one({"id": city_id}, {"_id": 0})
+    if not item:
+        raise HTTPException(status_code=404, detail="City not found in queue")
+    
+    settings = await get_api_keys()
+    if not settings.get("gemini_api_key"):
+        raise HTTPException(status_code=400, detail="Gemini API key not configured")
+    
+    try:
+        await db.queue.update_one(
+            {"id": city_id},
+            {"$set": {"status": "processing", "progress": 10, "updated_at": datetime.now(timezone.utc).isoformat()}}
+        )
+        
+        # Read image
+        with open(item["original_filepath"], "rb") as f:
+            image_bytes = f.read()
+        
+        img = Image.open(io.BytesIO(image_bytes))
+        img_width, img_height = img.size
+        
+        # STEP 1: AI CALL (ONCE) - 30-60 seconds
+        client = genai.Client(api_key=settings["gemini_api_key"])
+        
+        prompt = f"""You are a vector line art specialist creating structured SVG artwork.
+
+Transform this city skyline photo into a DETAILED vector line art SVG with STRUCTURED building groups.
+
+CRITICAL STRUCTURE REQUIREMENTS:
+1. Each building MUST be wrapped in <g id="building-1">, <g id="building-2">, etc.
+2. Add data-height="Y" attribute where Y = building's TOP Y-coordinate
+3. Use viewBox="0 0 {img_width} {img_height}"
+4. ONLY black strokes (stroke="#000000" stroke-width="2")
+5. NO fills (fill="none" or omit fill attribute)
+6. NO gradients, NO raster images
+7. Include architectural details (windows, roof lines) as simple lines
+
+EXAMPLE STRUCTURE:
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {img_width} {img_height}">
+  <g id="building-1" data-height="120">
+    <rect x="50" y="120" width="80" height="380" stroke="#000000" stroke-width="2" fill="none"/>
+    <line x1="60" y1="150" x2="120" y2="150" stroke="#000000" stroke-width="1"/>
+  </g>
+  <g id="building-2" data-height="80">
+    <path d="M 150 80 L 150 500 L 220 500 L 220 80 Z" stroke="#000000" stroke-width="2" fill="none"/>
+  </g>
+  ...more buildings...
+</svg>
+
+Return ONLY the complete SVG code. No explanation, no markdown blocks."""
+
+        # Determine MIME type
+        file_ext = Path(item["original_filepath"]).suffix.lower()
+        mime_types = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp'}
+        mime_type = mime_types.get(file_ext, 'image/jpeg')
+        
+        image_part = genai.types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+        
+        result = await client.aio.models.generate_content(
+            model="gemini-2.0-flash-exp",
+            contents=[prompt, image_part],
+            config=genai.types.GenerateContentConfig(temperature=0.3)
+        )
+        
+        master_svg = result.text.strip()
+        
+        # Clean up markdown if present
+        if "```" in master_svg:
+            svg_match = re.search(r'```(?:svg|xml)?\s*([\s\S]*?)```', master_svg)
+            if svg_match:
+                master_svg = svg_match.group(1).strip()
+        
+        # Ensure XML declaration
+        if not master_svg.startswith('<?xml'):
+            master_svg = '<?xml version="1.0" encoding="UTF-8"?>\n' + master_svg
+        
+        await db.queue.update_one({"id": city_id}, {"$set": {"progress": 50}})
+        
+        # STEP 2: Parse buildings (instant)
+        buildings, viewbox = parse_svg_buildings(master_svg)
+        
+        await db.queue.update_one({"id": city_id}, {"$set": {"progress": 60}})
+        
+        # STEP 3: Separate into 3 layers (instant)
+        layer_paths = separate_buildings_into_layers(master_svg, city_id)
+        
+        await db.queue.update_one({"id": city_id}, {"$set": {"progress": 80}})
+        
+        # STEP 4: Save master SVG
+        master_path = UPLOAD_DIR / "processed" / f"{city_id}_master.svg"
+        with open(master_path, "w") as f:
+            f.write(master_svg)
+        
+        # STEP 5: Save to database
+        now = datetime.now(timezone.utc).isoformat()
+        await db.processed.insert_one({
+            "id": city_id,
+            "city_name": item["city_name"],
+            "style_id": item["style_id"],
+            "style_name": item["style_name"],
+            "master_svg_path": str(master_path),
+            "layer_1_path": layer_paths[0],
+            "layer_2_path": layer_paths[1],
+            "layer_3_path": layer_paths[2],
+            "layer_count": 3,
+            "building_count": len(buildings),
+            "expansion_percentage": 0,
+            "created_at": item["created_at"],
+            "processed_at": now,
+            "status": "done"
+        })
+        
+        # Update queue
+        await db.queue.update_one(
+            {"id": city_id},
+            {"$set": {"status": "done", "progress": 100, "updated_at": now}}
+        )
+        
+        return {
+            "status": "complete",
+            "city_id": city_id,
+            "message": f"All 3 layers created! Found {len(buildings)} buildings.",
+            "layer_count": 3,
+            "building_count": len(buildings)
+        }
+        
+    except Exception as e:
+        logger.error(f"Processing error: {e}")
+        await db.queue.update_one(
+            {"id": city_id},
+            {"$set": {"status": "error", "error_message": str(e), "updated_at": datetime.now(timezone.utc).isoformat()}}
+        )
+        raise HTTPException(status_code=500, detail=str(e))
+
 # STAGE 1: Gemini Style Transfer
+# DEPRECATED - Use /process/{city_id} instead
 @api_router.post("/process/stage1/{city_id}")
 async def process_stage1(city_id: str):
-    """Stage 1: Convert photo to vector line art SVG using Gemini"""
+    """DEPRECATED - Stage 1: Convert photo to vector line art SVG using Gemini. Use /process/{city_id} instead."""
     item = await db.queue.find_one({"id": city_id}, {"_id": 0})
     if not item:
         raise HTTPException(status_code=404, detail="City not found in queue")
@@ -545,13 +698,23 @@ Do not include any explanation or markdown - just the raw SVG."""
 # Get Stage 1 SVG preview
 @api_router.get("/process/stage1/{city_id}/preview")
 async def get_stage1_preview(city_id: str):
-    """Get Stage 1 SVG content for preview"""
+    """Get master SVG content for preview (backward compatibility)"""
+    # Check processed collection first
+    city = await db.processed.find_one({"id": city_id})
+    if city and city.get("master_svg_path"):
+        svg_path = Path(city["master_svg_path"])
+        if svg_path.exists():
+            with open(svg_path, "r") as f:
+                svg_content = f.read()
+            return {"svg": svg_content}
+    
+    # Fallback to old queue item
     item = await db.queue.find_one({"id": city_id}, {"_id": 0})
     if not item:
         raise HTTPException(status_code=404, detail="City not found")
     
     if not item.get("stage1_svg_path"):
-        raise HTTPException(status_code=400, detail="Stage 1 not complete yet")
+        raise HTTPException(status_code=400, detail="Processing not complete yet - SVG not available")
     
     svg_path = Path(item["stage1_svg_path"])
     if not svg_path.exists():
@@ -560,16 +723,13 @@ async def get_stage1_preview(city_id: str):
     with open(svg_path, "r") as f:
         svg_content = f.read()
     
-    return {
-        "svg": svg_content,
-        "original_width": item.get("original_width", 1000),
-        "original_height": item.get("original_height", 1000)
-    }
+    return {"svg": svg_content}
 
 # Apply Spacing
+# DEPRECATED - Use /cities/{city_id}/spacing instead
 @api_router.post("/process/spacing/{city_id}")
 async def apply_spacing(city_id: str, spacing: SpacingInput):
-    """Apply horizontal spacing expansion to Stage 1 SVG"""
+    """DEPRECATED - Apply horizontal spacing expansion to Stage 1 SVG. Use /cities/{city_id}/spacing instead."""
     item = await db.queue.find_one({"id": city_id}, {"_id": 0})
     if not item:
         raise HTTPException(status_code=404, detail="City not found")
@@ -643,9 +803,10 @@ async def get_spaced_preview(city_id: str):
     }
 
 # STAGE 2: Gemini Layer Separation
+# DEPRECATED - Use /process/{city_id} instead
 @api_router.post("/process/stage2/{city_id}")
 async def process_stage2(city_id: str):
-    """Stage 2: Use Gemini to separate SVG into 3 layers based on building height"""
+    """DEPRECATED - Stage 2: Use Gemini to separate SVG into 3 layers based on building height. Use /process/{city_id} instead."""
     item = await db.queue.find_one({"id": city_id}, {"_id": 0})
     if not item:
         raise HTTPException(status_code=404, detail="City not found")
@@ -827,6 +988,59 @@ No explanation, no markdown - just the JSON object."""
             {"id": city_id},
             {"$set": {"status": "error", "error_message": str(e), "updated_at": datetime.now(timezone.utc).isoformat()}}
         )
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.post("/cities/{city_id}/spacing")
+async def apply_spacing_to_city(city_id: str, spacing: SpacingInput):
+    """
+    Apply horizontal spacing to all 3 layers - INSTANT (no AI)
+    Uses SVG transforms to shift buildings
+    """
+    city = await db.processed.find_one({"id": city_id})
+    if not city:
+        raise HTTPException(status_code=404, detail="City not found")
+    
+    try:
+        # Apply spacing to all 3 layers
+        for layer_num in [1, 2, 3]:
+            layer_path = Path(city[f"layer_{layer_num}_path"])
+            
+            with open(layer_path, "r") as f:
+                svg_content = f.read()
+            
+            # Transform SVG (instant - no AI!)
+            spaced_svg = apply_horizontal_spacing(svg_content, spacing.expansion_percentage)
+            
+            # Overwrite layer file
+            with open(layer_path, "w") as f:
+                f.write(spaced_svg)
+        
+        # Also apply to master SVG if it exists
+        if city.get("master_svg_path"):
+            master_path = Path(city["master_svg_path"])
+            if master_path.exists():
+                with open(master_path, "r") as f:
+                    master_content = f.read()
+                
+                spaced_master = apply_horizontal_spacing(master_content, spacing.expansion_percentage)
+                
+                with open(master_path, "w") as f:
+                    f.write(spaced_master)
+        
+        # Update database
+        await db.processed.update_one(
+            {"id": city_id},
+            {"$set": {"expansion_percentage": spacing.expansion_percentage}}
+        )
+        
+        return {
+            "status": "success",
+            "message": f"Spacing applied: {spacing.expansion_percentage}%",
+            "expansion_percentage": spacing.expansion_percentage
+        }
+        
+    except Exception as e:
+        logger.error(f"Spacing error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # Public API - Processed Cities
