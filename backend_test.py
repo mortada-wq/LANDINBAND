@@ -310,6 +310,9 @@ startxref
 
     def test_process_next_no_api_keys(self):
         """Test process next without proper API keys (should fail gracefully)"""
+        # NOTE: The new single-stage processing endpoint is /process/{city_id}
+        # This replaces the old 2-stage workflow (/process/stage1, /process/stage2)
+        # For now, testing process-next which should fail without API keys
         success, data = self.run_test("Process Next (No API Keys)", "POST", "queue/process-next", 400)
         # We expect this to fail with 400 due to missing API keys
         if not success:
