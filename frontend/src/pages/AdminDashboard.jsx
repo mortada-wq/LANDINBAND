@@ -771,7 +771,7 @@ export default function AdminDashboard() {
                 onValueChange={(val) => setSpacingValue(val[0])}
                 min={0}
                 max={200}
-                step={10}
+                step={5}
                 className="mt-2"
               />
               <p className="text-sm text-gray-600 mt-2">
