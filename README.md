@@ -10,6 +10,7 @@ export MONGO_URL="mongodb://localhost:27017"
 export DB_NAME="layered_relief"
 export ADMIN_EMAIL="admin@example.com"
 export ADMIN_PASSWORD="YOUR_SECURE_PASSWORD_HERE"
+# Use a real password locally and avoid committing secrets to git.
 export CORS_ORIGINS="http://localhost:3000"
 uvicorn server:app --reload --port 8000
 ```
@@ -37,4 +38,10 @@ Frontend tests currently report "No tests found" (expected until tests are added
 ```bash
 cd frontend
 yarn test --watchAll=false
+```
+
+Backend tests require pytest and local env setup; run them after installing dependencies:
+```bash
+cd backend
+pytest
 ```
