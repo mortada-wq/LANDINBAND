@@ -40,8 +40,14 @@ cd frontend
 yarn test --watchAll=false
 ```
 
-Backend tests require pytest and local env setup; run them after installing dependencies:
+If you prefer npm for frontend tests:
+```bash
+cd frontend
+npm test -- --watchAll=false
+```
+
+Backend tests are run via the existing script (expects the API to be reachable):
 ```bash
 cd backend
-pytest
+python ../backend_test.py
 ```
